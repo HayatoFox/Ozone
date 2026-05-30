@@ -2,13 +2,14 @@
 //! Cf. docs/05-gateway-temps-reel.md.
 
 use crate::crypto;
-use crate::state::AppState;
+use crate::permissions as pg;
+use crate::state::{AppState, EventScope};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
 use futures_util::{SinkExt, StreamExt};
 use ozone_proto::gateway::{opcode, GatewayFrame};
-use ozone_proto::Snowflake;
+use ozone_proto::{perms, Snowflake};
 use serde_json::json;
 use sqlx::Row;
 
@@ -70,10 +71,13 @@ async fn handle_socket(socket: WebSocket, st: AppState) {
             }
             ev = hub_rx.recv() => {
                 if let Ok(event) = ev {
-                    if authed.is_some() {
-                        seq += 1;
-                        let f = GatewayFrame::dispatch(event.t, event.d, seq);
-                        if send_frame(&mut tx, &f).await.is_err() { break; }
+                    if let Some(uid) = authed {
+                        // Routage pub/sub : on ne pousse l'événement que si l'utilisateur y a droit.
+                        if should_deliver(&st, uid.as_i64(), &event.scope).await {
+                            seq += 1;
+                            let f = GatewayFrame::dispatch(event.t, event.d, seq);
+                            if send_frame(&mut tx, &f).await.is_err() { break; }
+                        }
                     }
                 }
             }
@@ -133,4 +137,50 @@ async fn build_ready(st: &AppState, uid: Snowflake) -> serde_json::Value {
         "instance": { "id": st.instance.instance_id.to_string(), "name": st.instance.name },
         "guilds": guild_list,
     })
+}
+
+/// Décide si la session d'un utilisateur doit recevoir un événement, selon sa **portée**
+/// (membre de la guilde, droit de voir le salon, destinataire du MP, ou utilisateur ciblé).
+pub async fn should_deliver(st: &AppState, user_id: i64, scope: &EventScope) -> bool {
+    match scope {
+        EventScope::Global => true,
+        EventScope::User(u) => *u == user_id,
+        EventScope::Guild(g) => is_guild_member(st, *g, user_id).await,
+        EventScope::Dm(c) => is_dm_recipient(st, *c, user_id).await,
+        EventScope::Channel {
+            guild_id,
+            channel_id,
+        } => {
+            let owner = match pg::guild_owner(&st.pool, *guild_id).await {
+                Ok(Some(o)) => o,
+                _ => return false,
+            };
+            match pg::channel_permissions(&st.pool, *guild_id, owner, *channel_id, user_id).await {
+                Ok(p) => perms::has(p, perms::VIEW_CHANNEL),
+                Err(_) => false,
+            }
+        }
+    }
+}
+
+async fn is_guild_member(st: &AppState, guild_id: i64, user_id: i64) -> bool {
+    sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = ? AND user_id = ?")
+        .bind(guild_id)
+        .bind(user_id)
+        .fetch_optional(&st.pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
+}
+
+async fn is_dm_recipient(st: &AppState, channel_id: i64, user_id: i64) -> bool {
+    sqlx::query("SELECT 1 FROM dm_recipients WHERE channel_id = ? AND user_id = ?")
+        .bind(channel_id)
+        .bind(user_id)
+        .fetch_optional(&st.pool)
+        .await
+        .ok()
+        .flatten()
+        .is_some()
 }

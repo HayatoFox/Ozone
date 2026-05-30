@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::{AppState, HubEvent};
+use crate::state::{AppState, EventScope, HubEvent};
 use crate::util::parse_i64;
 use axum::extract::{Path, Query, State};
 use axum::Json;
@@ -24,10 +24,19 @@ const MSG_SELECT: &str =
      m.created_at, m.edited_at, m.reference_id, m.pinned, u.username, u.display_name, u.avatar_id \
      FROM messages m JOIN users u ON u.id = m.author_id";
 
-fn emit(st: &AppState, t: &str, d: serde_json::Value) {
+async fn emit(st: &AppState, channel_id: i64, t: &str, d: serde_json::Value) {
+    // Portée pub/sub = ce salon (MP ou salon de guilde), qui existe au moment de l'émission.
+    let scope = match crate::permissions::channel_guild(&st.pool, channel_id).await {
+        Ok(Some(Some(gid))) => EventScope::Channel {
+            guild_id: gid,
+            channel_id,
+        },
+        _ => EventScope::Dm(channel_id),
+    };
     let _ = st.hub.send(HubEvent {
         t: t.to_string(),
         d,
+        scope,
     });
 }
 
@@ -302,9 +311,11 @@ pub async fn create_message(
     .await?;
     emit(
         &st,
+        cid,
         "MESSAGE_CREATE",
         serde_json::to_value(&msg).unwrap_or_default(),
-    );
+    )
+    .await;
     Ok(Json(msg))
 }
 
@@ -344,9 +355,11 @@ pub async fn edit_message(
     .await?;
     emit(
         &st,
+        cid,
         "MESSAGE_UPDATE",
         serde_json::to_value(&msg).unwrap_or_default(),
-    );
+    )
+    .await;
     Ok(Json(msg))
 }
 
@@ -377,9 +390,11 @@ pub async fn delete_message(
         .await?;
     emit(
         &st,
+        cid,
         "MESSAGE_DELETE",
         json!({ "id": mid.to_string(), "channel_id": cid.to_string() }),
-    );
+    )
+    .await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -415,9 +430,11 @@ pub async fn bulk_delete(
     }
     emit(
         &st,
+        cid,
         "MESSAGE_DELETE_BULK",
         json!({ "channel_id": cid.to_string(), "ids": deleted }),
-    );
+    )
+    .await;
     Ok(Json(json!({ "deleted": deleted.len() })))
 }
 
@@ -451,9 +468,11 @@ pub async fn add_reaction(
         .await?;
     emit(
         &st,
+        cid,
         "MESSAGE_REACTION_ADD",
         json!({ "channel_id": cid.to_string(), "message_id": mid.to_string(), "user_id": user.id.to_string(), "emoji": emoji }),
-    );
+    )
+    .await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -474,9 +493,11 @@ pub async fn remove_reaction(
         .await?;
     emit(
         &st,
+        cid,
         "MESSAGE_REACTION_REMOVE",
         json!({ "channel_id": cid.to_string(), "message_id": mid.to_string(), "user_id": user.id.to_string(), "emoji": emoji }),
-    );
+    )
+    .await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -535,9 +556,11 @@ pub async fn pin_message(
         .await?;
     emit(
         &st,
+        cid,
         "CHANNEL_PINS_UPDATE",
         json!({ "channel_id": cid.to_string() }),
-    );
+    )
+    .await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -557,9 +580,11 @@ pub async fn unpin_message(
         .await?;
     emit(
         &st,
+        cid,
         "CHANNEL_PINS_UPDATE",
         json!({ "channel_id": cid.to_string() }),
-    );
+    )
+    .await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -575,8 +600,10 @@ pub async fn typing(
     pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
     emit(
         &st,
+        cid,
         "TYPING_START",
         json!({ "channel_id": cid.to_string(), "user_id": user.id.to_string(), "timestamp": now_ms() }),
-    );
+    )
+    .await;
     Ok(Json(json!({ "ok": true })))
 }

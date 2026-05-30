@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::{AppState, HubEvent};
+use crate::state::{AppState, EventScope, HubEvent};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -21,10 +21,11 @@ const CHANNEL_SELECT: &str =
 const ALLOWED_KINDS: [u8; 7] = [0, 2, 4, 5, 13, 15, 16];
 const MAX_SLOWMODE: i32 = 21_600; // 6 h
 
-fn emit(st: &AppState, t: &str, d: serde_json::Value) {
+fn emit(st: &AppState, scope: EventScope, t: &str, d: serde_json::Value) {
     let _ = st.hub.send(HubEvent {
         t: t.to_string(),
         d,
+        scope,
     });
 }
 
@@ -174,6 +175,10 @@ pub async fn create_channel(
     let ch = fetch_channel(&st, id.as_i64()).await?;
     emit(
         &st,
+        EventScope::Channel {
+            guild_id: gid,
+            channel_id: id.as_i64(),
+        },
         "CHANNEL_CREATE",
         serde_json::to_value(&ch).unwrap_or_default(),
     );
@@ -281,6 +286,10 @@ pub async fn update_channel(
     let ch = fetch_channel(&st, cid).await?;
     emit(
         &st,
+        EventScope::Channel {
+            guild_id: gid,
+            channel_id: cid,
+        },
         "CHANNEL_UPDATE",
         serde_json::to_value(&ch).unwrap_or_default(),
     );
@@ -321,6 +330,7 @@ pub async fn delete_channel(
         .await?;
     emit(
         &st,
+        EventScope::Guild(gid),
         "CHANNEL_DELETE",
         serde_json::json!({ "id": cid.to_string(), "guild_id": gid.to_string() }),
     );

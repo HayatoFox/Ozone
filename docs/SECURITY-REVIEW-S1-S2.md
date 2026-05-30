@@ -95,5 +95,24 @@ Cœur (intégration de l'accès MP dans `require_channel_perm`) par le mainteneu
 
 Protections structurelles : accès MP/groupe réservé aux **destinataires** (intégré dans `require_channel_perm` → un non-destinataire obtient `0` permission), retrait d'un tiers **réservé au propriétaire**, blocage = **lecture seule** en 1:1 (inactif en groupe, parité Discord assumée), taille de groupe bornée (10), transfert automatique de propriété au départ du propriétaire.
 
+## 8. S5 — Routage Gateway (souscription pub/sub)
+
+> Rappel terminologique : « abonnement / souscription » désigne ici le **routage pub/sub** des événements temps réel, **pas** une offre payante. Aucune fonctionnalité payante dans le projet.
+
+| # | Sévérité | Faille | Correctif |
+|---|---|---|---|
+| **F6** | **Moyenne (confidentialité)** | Le gateway minimal **diffusait chaque événement à toutes les connexions authentifiées** → un utilisateur recevait les messages de guildes/MP où il n'était pas. | Chaque événement porte une **portée** (`EventScope`) ; `should_deliver` ne pousse l'événement qu'aux ayants droit (membre de la guilde, droit de **voir** le salon, destinataire du MP, ou utilisateur ciblé). |
+
+Protections confirmées (`gateway.rs` + `security_s5.rs`) :
+
+| Vecteur testé | Test | Résultat |
+|---|---|---|
+| Membre / destinataire reçoit ses événements | `routing_delivers_to_authorized_users` | livré |
+| Non-membre reçoit un événement de guilde / salon / MP | `routing_denies_unauthorized_users` | **non livré** |
+| Membre **sans VIEW** reçoit un événement d'un salon privé | idem | **non livré** (le propriétaire, oui) |
+| Événement à portée `User` reçu par un autre | idem | **non livré** |
+
+Le filtrage réutilise exactement `channel_permissions` (même logique d'autorisation que l'API REST) → cohérence entre ce qu'on peut lire et ce qu'on reçoit en temps réel. *Note d'échelle : en mode tout-en-un, le filtrage fait une vérification par événement/connexion ; à grande échelle, on passe aux topics Redis/NATS par guilde (cf. [05-gateway-temps-reel](05-gateway-temps-reel.md)).*
+
 ---
-*Document vivant — revue effectuée pour S1 → S4 (relations + MP/groupes) ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S5 ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
