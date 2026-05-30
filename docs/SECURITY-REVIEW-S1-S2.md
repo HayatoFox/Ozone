@@ -114,5 +114,19 @@ Protections confirmées (`gateway.rs` + `security_s5.rs`) :
 
 Le filtrage réutilise exactement `channel_permissions` (même logique d'autorisation que l'API REST) → cohérence entre ce qu'on peut lire et ce qu'on reçoit en temps réel. *Note d'échelle : en mode tout-en-un, le filtrage fait une vérification par événement/connexion ; à grande échelle, on passe aux topics Redis/NATS par guilde (cf. [05-gateway-temps-reel](05-gateway-temps-reel.md)).*
 
+## 9. S6a — Expressions (emojis / stickers / soundboard)
+
+Trois modules CRUD **écrits par des sous-agents en parallèle** (+ tests fonctionnels), **intégrés et audités par le mainteneur** (qui a écrit les tests de sécurité). Intégration propre ; seule correction : un lint clippy (`manual_range_contains`) dans le code généré. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`security_s6.rs`) | Résultat |
+|---|---|---|
+| Membre sans permission crée une expression | `non_privileged_cannot_create_expressions` | `403` (emoji/sticker/son) |
+| Non-membre liste / crée | idem | `403` |
+| `CREATE_GUILD_EXPRESSIONS` gère **seulement les siennes** | `create_permission_limits_to_own_expressions` | tiers `403`, auteur/propriétaire `200` |
+| Isolation inter-guildes (gérer une expression d'une autre guilde) | `cross_guild_isolation_and_validation` | `404` |
+| Nom invalide / asset vide | idem | `400` |
+
+Gardes : `require_expression_create` (CREATE **ou** MANAGE) et `require_expression_manage` (MANAGE **ou** auteur), `fetch` scopé à la guilde (pas d'IDOR inter-guildes), validation des noms/assets.
+
 ---
-*Document vivant — revue effectuée pour S1 → S5 ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S6a ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*

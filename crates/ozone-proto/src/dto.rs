@@ -386,3 +386,100 @@ pub struct DMChannel {
 pub struct CreateDM {
     pub recipients: Vec<Snowflake>,
 }
+
+// ──────────────────────────── Expressions (emojis / stickers / sons) ────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Emoji {
+    pub id: Snowflake,
+    pub guild_id: Snowflake,
+    pub name: String,
+    pub animated: bool,
+    pub image_id: String,
+    pub created_by: Snowflake,
+    pub available: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateEmoji {
+    pub name: String,
+    #[serde(default)]
+    pub animated: bool,
+    /// Référence de l'asset image (pipeline de stockage à venir).
+    pub image_id: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateEmoji {
+    pub name: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Sticker {
+    pub id: Snowflake,
+    pub guild_id: Snowflake,
+    pub name: String,
+    pub description: Option<String>,
+    pub tags: Option<String>,
+    /// 1 png · 2 apng · 3 lottie · 4 gif.
+    pub format_type: u8,
+    pub asset_id: String,
+    pub created_by: Snowflake,
+    pub available: bool,
+}
+
+fn default_sticker_format() -> u8 {
+    1
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateSticker {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub tags: Option<String>,
+    #[serde(default = "default_sticker_format")]
+    pub format_type: u8,
+    pub asset_id: String,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateSticker {
+    pub name: Option<String>,
+    pub description: Option<String>,
+    pub tags: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SoundboardSound {
+    pub id: Snowflake,
+    pub guild_id: Snowflake,
+    pub name: String,
+    pub sound_id: String,
+    pub volume: f64,
+    pub emoji: Option<String>,
+    pub created_by: Snowflake,
+    pub available: bool,
+}
+
+fn default_volume() -> f64 {
+    1.0
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateSound {
+    pub name: String,
+    pub sound_id: String,
+    #[serde(default = "default_volume")]
+    pub volume: f64,
+    #[serde(default)]
+    pub emoji: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateSound {
+    pub name: Option<String>,
+    pub volume: Option<f64>,
+    pub emoji: Option<String>,
+}

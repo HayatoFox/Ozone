@@ -280,3 +280,41 @@ pub async fn require_channel_perm(
         }
     }
 }
+
+/// Droit de **créer** une expression (`CREATE_GUILD_EXPRESSIONS` ou `MANAGE_GUILD_EXPRESSIONS`).
+pub async fn require_expression_create(
+    pool: &SqlitePool,
+    guild_id: i64,
+    user_id: i64,
+) -> AppResult<()> {
+    let p = require_guild_perm(pool, guild_id, user_id, 0).await?;
+    if perms::has(p, perms::CREATE_GUILD_EXPRESSIONS)
+        || perms::has(p, perms::MANAGE_GUILD_EXPRESSIONS)
+    {
+        Ok(())
+    } else {
+        Err(AppError::forbidden(
+            "permissions insuffisantes pour créer une expression",
+        ))
+    }
+}
+
+/// Droit de **modifier/supprimer** une expression : `MANAGE_GUILD_EXPRESSIONS`, ou
+/// `CREATE_GUILD_EXPRESSIONS` si on en est l'auteur (`created_by`).
+pub async fn require_expression_manage(
+    pool: &SqlitePool,
+    guild_id: i64,
+    user_id: i64,
+    created_by: i64,
+) -> AppResult<()> {
+    let p = require_guild_perm(pool, guild_id, user_id, 0).await?;
+    if perms::has(p, perms::MANAGE_GUILD_EXPRESSIONS) {
+        return Ok(());
+    }
+    if created_by == user_id && perms::has(p, perms::CREATE_GUILD_EXPRESSIONS) {
+        return Ok(());
+    }
+    Err(AppError::forbidden(
+        "permissions insuffisantes pour gérer cette expression",
+    ))
+}

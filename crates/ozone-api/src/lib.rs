@@ -12,11 +12,14 @@ pub mod permissions;
 pub mod routes_auth;
 pub mod routes_chat;
 pub mod routes_dms;
+pub mod routes_emojis;
 pub mod routes_guild;
 pub mod routes_instance;
 pub mod routes_messages;
 pub mod routes_relationships;
 pub mod routes_roles;
+pub mod routes_soundboard;
+pub mod routes_stickers;
 pub mod state;
 pub mod util;
 
@@ -136,6 +139,31 @@ pub fn build_app(state: AppState) -> Router {
             get(routes_guild::list_invites).post(routes_guild::create_invite),
         )
         .route("/invites/:code", post(routes_guild::join_invite))
+        // Expressions (emojis / stickers / soundboard)
+        .route(
+            "/guilds/:guild_id/emojis",
+            get(routes_emojis::list_emojis).post(routes_emojis::create_emoji),
+        )
+        .route(
+            "/guilds/:guild_id/emojis/:emoji_id",
+            patch(routes_emojis::update_emoji).delete(routes_emojis::delete_emoji),
+        )
+        .route(
+            "/guilds/:guild_id/stickers",
+            get(routes_stickers::list_stickers).post(routes_stickers::create_sticker),
+        )
+        .route(
+            "/guilds/:guild_id/stickers/:sticker_id",
+            patch(routes_stickers::update_sticker).delete(routes_stickers::delete_sticker),
+        )
+        .route(
+            "/guilds/:guild_id/soundboard",
+            get(routes_soundboard::list_sounds).post(routes_soundboard::create_sound),
+        )
+        .route(
+            "/guilds/:guild_id/soundboard/:sound_id",
+            patch(routes_soundboard::update_sound).delete(routes_soundboard::delete_sound),
+        )
         // Gateway temps réel
         .route("/gateway", get(gateway::ws_handler))
         .with_state(state)
