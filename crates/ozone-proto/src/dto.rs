@@ -313,3 +313,56 @@ pub struct CreateInvite {
     #[serde(default)]
     pub max_age: i64,
 }
+
+// ──────────────────────────── Relations (amis / blocages) ────────────────────────────
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelationshipType {
+    Friend,
+    Incoming,
+    Outgoing,
+    Blocked,
+}
+
+impl RelationshipType {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RelationshipType::Friend => "friend",
+            RelationshipType::Incoming => "incoming",
+            RelationshipType::Outgoing => "outgoing",
+            RelationshipType::Blocked => "blocked",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "incoming" => RelationshipType::Incoming,
+            "outgoing" => RelationshipType::Outgoing,
+            "blocked" => RelationshipType::Blocked,
+            _ => RelationshipType::Friend,
+        }
+    }
+}
+
+/// `id` = identifiant de l'autre utilisateur.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Relationship {
+    pub id: Snowflake,
+    #[serde(rename = "type")]
+    pub kind: RelationshipType,
+    pub user: User,
+    pub since: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AddRelationship {
+    pub username: String,
+    /// `true` = bloquer au lieu d'envoyer une demande d'ami.
+    #[serde(default)]
+    pub block: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UpdateNote {
+    pub note: String,
+}

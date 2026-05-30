@@ -14,6 +14,7 @@ pub mod routes_chat;
 pub mod routes_guild;
 pub mod routes_instance;
 pub mod routes_messages;
+pub mod routes_relationships;
 pub mod routes_roles;
 pub mod state;
 pub mod util;
@@ -37,6 +38,21 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/login", post(routes_auth::login))
         .route("/auth/token/refresh", post(routes_auth::refresh))
         .route("/users/@me", get(routes_auth::me))
+        // Relations (amis / blocages / notes)
+        .route(
+            "/users/@me/relationships",
+            get(routes_relationships::list_relationships)
+                .post(routes_relationships::add_relationship),
+        )
+        .route(
+            "/users/@me/relationships/:user_id",
+            put(routes_relationships::accept_relationship)
+                .delete(routes_relationships::remove_relationship),
+        )
+        .route(
+            "/users/@me/notes/:user_id",
+            get(routes_relationships::get_note).put(routes_relationships::put_note),
+        )
         // Guildes / salons / messages
         .route(
             "/guilds",

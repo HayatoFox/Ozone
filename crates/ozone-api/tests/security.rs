@@ -17,10 +17,14 @@ use tower::ServiceExt;
 // ───────────────────────────── Helpers ─────────────────────────────
 
 async fn app() -> Router {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let unique = format!(
+        "{}_{:?}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        std::thread::current().id()
+    );
     let path = std::env::temp_dir().join(format!("ozone-test-sec-{unique}.db"));
     let cfg = Config {
         bind: "127.0.0.1:0".into(),

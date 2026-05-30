@@ -10,10 +10,14 @@ use serde_json::{json, Value};
 use tower::ServiceExt;
 
 async fn test_state() -> ozone_api::state::AppState {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let unique = format!(
+        "{}_{:?}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        std::thread::current().id()
+    );
     let path = std::env::temp_dir().join(format!("ozone-test-{unique}.db"));
     let cfg = Config {
         bind: "127.0.0.1:0".into(),
@@ -187,10 +191,14 @@ async fn unauthorized_without_token() {
 // ─────────── Instance protégée par mot de passe (gate) ───────────
 
 async fn gated_state(password: &str) -> ozone_api::state::AppState {
-    let unique = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap()
-        .as_nanos();
+    let unique = format!(
+        "{}_{:?}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos(),
+        std::thread::current().id()
+    );
     let path = std::env::temp_dir().join(format!("ozone-test-gated-{unique}.db"));
     let cfg = Config {
         bind: "127.0.0.1:0".into(),

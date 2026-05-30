@@ -68,5 +68,17 @@ Aucune faille exploitable post-hoc : les mutations réutilisent `require_channel
 | Parenter / déplacer / réordonner vers une **autre guilde** | `cross_guild_parenting_and_reorder_blocked` | `404` |
 | Contourner le **slowmode** (membre simple vs `MANAGE_MESSAGES`) | `slowmode_gate_is_permission_based` | bloqué / autorisé selon la permission |
 
+## 6. S4 — Relations (amis / blocages / notes)
+
+Module implémenté par un **sous-agent**, puis **intégré et audité de façon adverse par le mainteneur**. Une faille non couverte par les tests générés a été trouvée à la revue et corrigée :
+
+| # | Sévérité | Faille | Correctif |
+|---|---|---|---|
+| **F5** | Faible | `PUT /users/@me/relationships/:id` (par identifiant) ne vérifiait ni l'auto-relation ni l'existence de la cible → création possible de `(moi,moi,incoming)` ou de lignes vers un utilisateur fantôme. | `friend_request` durci : rejet de l'auto-relation (`400`) + vérification d'existence de la cible (`404`). Test ajouté. |
+
+Protections confirmées (`relationships.rs` + `security_s4.rs`) : relations strictement **scopées à `@me`** (aucune route ne touche les relations d'autrui → pas d'IDOR), demande à un bloqueur → `403`, à soi-même → `400`, pseudo inconnu → `404`, note bornée (≤ 256), **isolation** (un tiers ne voit aucune relation). Requêtes paramétrées.
+
+> Note d'ingénierie : le harnais de test a aussi été durci (nom de base SQLite unique par **thread**) pour éliminer une **course** entre tests concurrents (horodatage ns identique sur l'horloge Windows) — stabilité CI, sans impact sécurité.
+
 ---
-*Document vivant — revue effectuée pour S1, S2, S3 ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S4 ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
