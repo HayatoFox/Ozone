@@ -44,7 +44,15 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/guilds/:guild_id/channels",
-            post(routes_chat::create_channel).get(routes_chat::list_channels),
+            post(routes_chat::create_channel)
+                .get(routes_chat::list_channels)
+                .patch(routes_chat::reorder_channels),
+        )
+        .route(
+            "/channels/:channel_id",
+            get(routes_chat::get_channel)
+                .patch(routes_chat::update_channel)
+                .delete(routes_chat::delete_channel),
         )
         .route(
             "/channels/:channel_id/messages",

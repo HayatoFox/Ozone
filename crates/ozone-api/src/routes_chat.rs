@@ -1,18 +1,32 @@
-//! Routes guildes & salons. Applique les permissions (cf. permissions.rs).
-//! Les opérations sur les messages sont dans routes_messages.rs.
+//! Routes guildes & salons (création, lecture, mise à jour, suppression, réordonnancement,
+//! catégories, slowmode/NSFW). Applique les permissions. Cf. docs/features/03-salons.md.
 
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::AppState;
+use crate::state::{AppState, HubEvent};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
-use ozone_proto::dto::{Channel, CreateChannel, CreateGuild, Guild};
+use ozone_proto::dto::{
+    Channel, ChannelPosition, CreateChannel, CreateGuild, Guild, UpdateChannel,
+};
 use ozone_proto::{perms, Snowflake};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
+
+const CHANNEL_SELECT: &str =
+    "SELECT id, guild_id, type AS kind, name, topic, position, parent_id, nsfw, rate_limit_per_user FROM channels";
+const ALLOWED_KINDS: [u8; 7] = [0, 2, 4, 5, 13, 15, 16];
+const MAX_SLOWMODE: i32 = 21_600; // 6 h
+
+fn emit(st: &AppState, t: &str, d: serde_json::Value) {
+    let _ = st.hub.send(HubEvent {
+        t: t.to_string(),
+        d,
+    });
+}
 
 // ───────────────────────────── Guildes ─────────────────────────────
 
@@ -39,7 +53,6 @@ pub async fn create_guild(
     .bind(now)
     .execute(&st.pool)
     .await?;
-    // Rôle @everyone (id = guild_id), permissions par défaut.
     sqlx::query(
         "INSERT INTO roles (id, guild_id, name, color, hoist, position, permissions, mentionable, managed, created_at) \
          VALUES (?, ?, '@everyone', 0, 0, 0, ?, 0, 1, ?)",
@@ -87,16 +100,16 @@ pub async fn list_guilds(
     .bind(user.id.as_i64())
     .fetch_all(&st.pool)
     .await?;
-    let guilds = rows
-        .into_iter()
-        .map(|r| Guild {
-            id: Snowflake::from_i64(r.get::<i64, _>("id")),
-            name: r.get("name"),
-            owner_id: Snowflake::from_i64(r.get::<i64, _>("owner_id")),
-            icon_id: r.get("icon_id"),
-        })
-        .collect();
-    Ok(Json(guilds))
+    Ok(Json(
+        rows.into_iter()
+            .map(|r| Guild {
+                id: Snowflake::from_i64(r.get::<i64, _>("id")),
+                name: r.get("name"),
+                owner_id: Snowflake::from_i64(r.get::<i64, _>("owner_id")),
+                icon_id: r.get("icon_id"),
+            })
+            .collect(),
+    ))
 }
 
 // ───────────────────────────── Salons ─────────────────────────────
@@ -114,30 +127,60 @@ pub async fn create_channel(
     if name.is_empty() || name.chars().count() > 100 {
         return Err(AppError::bad_request("nom de salon invalide"));
     }
+    if !ALLOWED_KINDS.contains(&req.kind) {
+        return Err(AppError::bad_request("type de salon non supporté"));
+    }
+    validate_topic(&req.topic)?;
+    let parent_id = match req.parent_id {
+        Some(p) => {
+            if req.kind == 4 {
+                return Err(AppError::bad_request(
+                    "une catégorie ne peut pas avoir de parent",
+                ));
+            }
+            ensure_category(&st, gid, p.as_i64()).await?;
+            Some(p.as_i64())
+        }
+        None => None,
+    };
+    let nsfw = req.nsfw.unwrap_or(false) as i64;
+    let rate = req.rate_limit_per_user.unwrap_or(0).clamp(0, MAX_SLOWMODE) as i64;
+
+    let maxpos: i64 =
+        sqlx::query("SELECT COALESCE(MAX(position), 0) AS m FROM channels WHERE guild_id = ?")
+            .bind(gid)
+            .fetch_one(&st.pool)
+            .await?
+            .get("m");
+    let position = maxpos + 1;
     let id = st.ids.next();
     sqlx::query(
-        "INSERT INTO channels (id, guild_id, type, name, topic, position, parent_id, created_at) VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
+        "INSERT INTO channels (id, guild_id, type, name, topic, position, parent_id, nsfw, rate_limit_per_user, created_at) \
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id.as_i64())
     .bind(gid)
     .bind(req.kind as i64)
     .bind(name)
     .bind(req.topic.as_deref())
+    .bind(position)
+    .bind(parent_id)
+    .bind(nsfw)
+    .bind(rate)
     .bind(now_ms())
     .execute(&st.pool)
     .await?;
-    Ok(Json(Channel {
-        id,
-        guild_id: Some(Snowflake::from_i64(gid)),
-        kind: req.kind,
-        name: name.to_string(),
-        topic: req.topic,
-        position: 0,
-        parent_id: None,
-    }))
+
+    let ch = fetch_channel(&st, id.as_i64()).await?;
+    emit(
+        &st,
+        "CHANNEL_CREATE",
+        serde_json::to_value(&ch).unwrap_or_default(),
+    );
+    Ok(Json(ch))
 }
 
-/// `GET /guilds/:guild_id/channels` — uniquement les salons visibles par l'utilisateur.
+/// `GET /guilds/:guild_id/channels` — uniquement les salons visibles.
 pub async fn list_channels(
     State(st): State<AppState>,
     user: AuthUser,
@@ -148,9 +191,9 @@ pub async fn list_channels(
     let owner = pg::guild_owner(&st.pool, gid)
         .await?
         .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
-    let rows = sqlx::query(
-        "SELECT id, guild_id, type AS kind, name, topic, position, parent_id FROM channels WHERE guild_id = ? ORDER BY position, id",
-    )
+    let rows = sqlx::query(&format!(
+        "{CHANNEL_SELECT} WHERE guild_id = ? ORDER BY position, id"
+    ))
     .bind(gid)
     .fetch_all(&st.pool)
     .await?;
@@ -166,6 +209,206 @@ pub async fn list_channels(
     Ok(Json(out))
 }
 
+/// `GET /channels/:channel_id`
+pub async fn get_channel(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(cid): Path<String>,
+) -> AppResult<Json<Channel>> {
+    let cid = parse_i64(&cid)?;
+    pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::VIEW_CHANNEL).await?;
+    Ok(Json(fetch_channel(&st, cid).await?))
+}
+
+/// `PATCH /channels/:channel_id`
+pub async fn update_channel(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(cid): Path<String>,
+    Json(req): Json<UpdateChannel>,
+) -> AppResult<Json<Channel>> {
+    let cid = parse_i64(&cid)?;
+    let (gid, _owner, _p) =
+        pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::MANAGE_CHANNELS).await?;
+    let cur = fetch_channel(&st, cid).await?;
+
+    let name = match req.name {
+        Some(n) => {
+            let n = n.trim().to_string();
+            if n.is_empty() || n.chars().count() > 100 {
+                return Err(AppError::bad_request("nom de salon invalide"));
+            }
+            n
+        }
+        None => cur.name.clone(),
+    };
+    if req.topic.is_some() {
+        validate_topic(&req.topic)?;
+    }
+    let topic = req.topic.or(cur.topic.clone());
+    let nsfw = req.nsfw.unwrap_or(cur.nsfw) as i64;
+    let rate = req
+        .rate_limit_per_user
+        .unwrap_or(cur.rate_limit_per_user)
+        .clamp(0, MAX_SLOWMODE) as i64;
+    let position = req.position.unwrap_or(cur.position) as i64;
+    let parent_id = match req.parent_id {
+        Some(p) => {
+            if cur.kind == 4 {
+                return Err(AppError::bad_request(
+                    "une catégorie ne peut pas avoir de parent",
+                ));
+            }
+            ensure_category(&st, gid, p.as_i64()).await?;
+            Some(p.as_i64())
+        }
+        None => cur.parent_id.map(|s| s.as_i64()),
+    };
+
+    sqlx::query(
+        "UPDATE channels SET name = ?, topic = ?, nsfw = ?, rate_limit_per_user = ?, position = ?, parent_id = ? WHERE id = ?",
+    )
+    .bind(&name)
+    .bind(topic.as_deref())
+    .bind(nsfw)
+    .bind(rate)
+    .bind(position)
+    .bind(parent_id)
+    .bind(cid)
+    .execute(&st.pool)
+    .await?;
+
+    let ch = fetch_channel(&st, cid).await?;
+    emit(
+        &st,
+        "CHANNEL_UPDATE",
+        serde_json::to_value(&ch).unwrap_or_default(),
+    );
+    Ok(Json(ch))
+}
+
+/// `DELETE /channels/:channel_id`
+pub async fn delete_channel(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(cid): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let cid = parse_i64(&cid)?;
+    let (gid, _owner, _p) =
+        pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::MANAGE_CHANNELS).await?;
+    // Les salons enfants d'une catégorie supprimée sont détachés (parent → NULL).
+    sqlx::query("UPDATE channels SET parent_id = NULL WHERE parent_id = ?")
+        .bind(cid)
+        .execute(&st.pool)
+        .await?;
+    sqlx::query(
+        "DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE channel_id = ?)",
+    )
+    .bind(cid)
+    .execute(&st.pool)
+    .await?;
+    sqlx::query("DELETE FROM messages WHERE channel_id = ?")
+        .bind(cid)
+        .execute(&st.pool)
+        .await?;
+    sqlx::query("DELETE FROM channel_overwrites WHERE channel_id = ?")
+        .bind(cid)
+        .execute(&st.pool)
+        .await?;
+    sqlx::query("DELETE FROM channels WHERE id = ?")
+        .bind(cid)
+        .execute(&st.pool)
+        .await?;
+    emit(
+        &st,
+        "CHANNEL_DELETE",
+        serde_json::json!({ "id": cid.to_string(), "guild_id": gid.to_string() }),
+    );
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `PATCH /guilds/:guild_id/channels` — réordonnancement / déplacement entre catégories.
+pub async fn reorder_channels(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(guild_id): Path<String>,
+    Json(items): Json<Vec<ChannelPosition>>,
+) -> AppResult<Json<serde_json::Value>> {
+    let gid = parse_i64(&guild_id)?;
+    pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_CHANNELS).await?;
+    if items.len() > 500 {
+        return Err(AppError::bad_request("trop d'éléments"));
+    }
+    for it in &items {
+        let cid = it.id.as_i64();
+        let in_guild = sqlx::query("SELECT 1 FROM channels WHERE id = ? AND guild_id = ?")
+            .bind(cid)
+            .bind(gid)
+            .fetch_optional(&st.pool)
+            .await?
+            .is_some();
+        if !in_guild {
+            return Err(AppError::not_found("salon hors de cette guilde"));
+        }
+        match it.parent_id {
+            Some(p) => {
+                ensure_category(&st, gid, p.as_i64()).await?;
+                sqlx::query(
+                    "UPDATE channels SET position = ?, parent_id = ? WHERE id = ? AND guild_id = ?",
+                )
+                .bind(it.position as i64)
+                .bind(p.as_i64())
+                .bind(cid)
+                .bind(gid)
+                .execute(&st.pool)
+                .await?;
+            }
+            None => {
+                sqlx::query("UPDATE channels SET position = ? WHERE id = ? AND guild_id = ?")
+                    .bind(it.position as i64)
+                    .bind(cid)
+                    .bind(gid)
+                    .execute(&st.pool)
+                    .await?;
+            }
+        }
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ───────────────────────────── Helpers ─────────────────────────────
+
+fn validate_topic(topic: &Option<String>) -> AppResult<()> {
+    if let Some(t) = topic {
+        if t.chars().count() > 1024 {
+            return Err(AppError::bad_request("sujet trop long (max 1024)"));
+        }
+    }
+    Ok(())
+}
+
+async fn ensure_category(st: &AppState, gid: i64, parent_id: i64) -> AppResult<()> {
+    let row = sqlx::query("SELECT type FROM channels WHERE id = ? AND guild_id = ?")
+        .bind(parent_id)
+        .bind(gid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("catégorie parente introuvable"))?;
+    if row.get::<i64, _>("type") != 4 {
+        return Err(AppError::bad_request("le parent n'est pas une catégorie"));
+    }
+    Ok(())
+}
+
+async fn fetch_channel(st: &AppState, cid: i64) -> AppResult<Channel> {
+    let row = sqlx::query(&format!("{CHANNEL_SELECT} WHERE id = ?"))
+        .bind(cid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("salon introuvable"))?;
+    Ok(row_to_channel(row))
+}
+
 fn row_to_channel(r: SqliteRow) -> Channel {
     Channel {
         id: Snowflake::from_i64(r.get::<i64, _>("id")),
@@ -177,5 +420,7 @@ fn row_to_channel(r: SqliteRow) -> Channel {
         parent_id: r
             .get::<Option<i64>, _>("parent_id")
             .map(Snowflake::from_i64),
+        nsfw: r.get::<i64, _>("nsfw") != 0,
+        rate_limit_per_user: r.get::<i64, _>("rate_limit_per_user") as i32,
     }
 }

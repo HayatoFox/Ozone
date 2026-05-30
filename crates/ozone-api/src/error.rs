@@ -38,6 +38,9 @@ impl AppError {
     pub fn internal(msg: impl Into<String>) -> Self {
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, 50000, msg)
     }
+    pub fn too_many(msg: impl Into<String>) -> Self {
+        Self::new(StatusCode::TOO_MANY_REQUESTS, 20016, msg)
+    }
 }
 
 impl IntoResponse for AppError {

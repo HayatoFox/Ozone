@@ -1,4 +1,6 @@
-# Revue de sécurité — S1 (permissions/rôles/membres/invitations) & S2 (messages)
+# Revue de sécurité — S1 (permissions/rôles/membres) · S2 (messages) · S3 (salons)
+
+> Document vivant : une vérification cyber est effectuée à la fin de **chaque** couche serveur.
 
 **Périmètre** : code serveur `ozone-api` des couches S1 et S2.
 **Méthode** : revue statique du code (chaque endpoint : authentification, autorisation, requêtes) + **tests d'intrusion automatisés** (`crates/ozone-api/tests/security.rs`, 11 scénarios adverses) rejouables en CI.
@@ -48,11 +50,23 @@
 ## 4. Comment rejouer
 
 ```sh
-cargo test -p ozone-api --test security      # 11 tests d'intrusion
-cargo test -p ozone-api                       # suite complète (16 tests)
+cargo test -p ozone-api --test security      # intrusion S1/S2
+cargo test -p ozone-api --test security_s3   # intrusion S3
+cargo test -p ozone-api                       # suite complète (21 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
 
+## 5. S3 — Salons avancés (catégories, slowmode, NSFW)
+
+Aucune faille exploitable post-hoc : les mutations réutilisent `require_channel_perm` / `require_guild_perm`. **Durcissements proactifs** appliqués : validation que la catégorie parente appartient à la guilde (anti-IDOR inter-guildes), réordonnancement borné (≤ 500) et restreint aux salons de la guilde, **slowmode** dont le contournement est strictement lié aux permissions (`MANAGE_MESSAGES` / `MANAGE_CHANNELS` / `BYPASS_SLOWMODE`), bornes sur `rate_limit_per_user` (0–21600), topic (≤ 1024), nom (≤ 100) et liste blanche de types de salon.
+
+| Vecteur testé | Test (`security_s3.rs`) | Résultat |
+|---|---|---|
+| Membre sans `MANAGE_CHANNELS` modifie/supprime/crée/réordonne | `member_without_manage_channels_cannot_modify` | `403` |
+| Non-membre lit un salon | idem | `403` |
+| Parenter / déplacer / réordonner vers une **autre guilde** | `cross_guild_parenting_and_reorder_blocked` | `404` |
+| Contourner le **slowmode** (membre simple vs `MANAGE_MESSAGES`) | `slowmode_gate_is_permission_based` | bloqué / autorisé selon la permission |
+
 ---
-*Revue limitée au périmètre S1/S2. À ré-effectuer après chaque nouvelle couche (S3+), et à compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1, S2, S3 ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*

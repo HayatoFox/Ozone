@@ -227,12 +227,39 @@ pub async fn create_message(
     Json(req): Json<CreateMessage>,
 ) -> AppResult<Json<Message>> {
     let cid = parse_i64(&cid)?;
-    pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
+    let (_gid, _owner, perms_acc) =
+        pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
     let content = req.content.trim_end();
     if content.is_empty() || content.chars().count() > 4000 {
         return Err(AppError::bad_request(
             "contenu de message invalide (1 à 4000 caractères)",
         ));
+    }
+    // Slowmode (sauf MANAGE_MESSAGES / MANAGE_CHANNELS / BYPASS_SLOWMODE).
+    if !(perms::has(perms_acc, perms::MANAGE_MESSAGES)
+        || perms::has(perms_acc, perms::MANAGE_CHANNELS)
+        || perms::has(perms_acc, perms::BYPASS_SLOWMODE))
+    {
+        let rate: i64 = sqlx::query("SELECT rate_limit_per_user FROM channels WHERE id = ?")
+            .bind(cid)
+            .fetch_one(&st.pool)
+            .await?
+            .get("rate_limit_per_user");
+        if rate > 0 {
+            let last: Option<i64> = sqlx::query(
+                "SELECT created_at FROM messages WHERE channel_id = ? AND author_id = ? ORDER BY id DESC LIMIT 1",
+            )
+            .bind(cid)
+            .bind(user.id.as_i64())
+            .fetch_optional(&st.pool)
+            .await?
+            .map(|r| r.get::<i64, _>("created_at"));
+            if let Some(last) = last {
+                if now_ms() - last < rate * 1000 {
+                    return Err(AppError::too_many("slowmode actif, réessayez plus tard"));
+                }
+            }
+        }
     }
 
     let reference_id = match req.reply_to {

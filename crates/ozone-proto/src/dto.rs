@@ -128,13 +128,16 @@ pub struct CreateGuild {
 pub struct Channel {
     pub id: Snowflake,
     pub guild_id: Option<Snowflake>,
-    /// Type de salon (0 = texte, 2 = vocal, … cf. `docs/features/03-salons.md`).
+    /// Type de salon (0 = texte, 2 = vocal, 4 = catégorie… cf. `docs/features/03-salons.md`).
     #[serde(rename = "type")]
     pub kind: u8,
     pub name: String,
     pub topic: Option<String>,
     pub position: i32,
     pub parent_id: Option<Snowflake>,
+    pub nsfw: bool,
+    /// Slowmode en secondes (0 = désactivé).
+    pub rate_limit_per_user: i32,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -144,6 +147,31 @@ pub struct CreateChannel {
     pub kind: u8,
     #[serde(default)]
     pub topic: Option<String>,
+    #[serde(default)]
+    pub parent_id: Option<Snowflake>,
+    #[serde(default)]
+    pub nsfw: Option<bool>,
+    #[serde(default)]
+    pub rate_limit_per_user: Option<i32>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateChannel {
+    pub name: Option<String>,
+    pub topic: Option<String>,
+    pub nsfw: Option<bool>,
+    pub rate_limit_per_user: Option<i32>,
+    pub position: Option<i32>,
+    pub parent_id: Option<Snowflake>,
+}
+
+/// Élément du tableau de réordonnancement des salons.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChannelPosition {
+    pub id: Snowflake,
+    pub position: i32,
+    #[serde(default)]
+    pub parent_id: Option<Snowflake>,
 }
 
 /// Agrégat de réaction sur un message.
