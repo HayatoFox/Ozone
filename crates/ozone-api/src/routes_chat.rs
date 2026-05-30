@@ -1,15 +1,15 @@
-//! Routes guildes / salons / messages. Applique les permissions (cf. permissions.rs).
-//! Diffuse `MESSAGE_CREATE` via la Gateway.
+//! Routes guildes & salons. Applique les permissions (cf. permissions.rs).
+//! Les opérations sur les messages sont dans routes_messages.rs.
 
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::{AppState, HubEvent};
+use crate::state::AppState;
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
-use ozone_proto::dto::{Channel, CreateChannel, CreateGuild, CreateMessage, Guild, Message, User};
+use ozone_proto::dto::{Channel, CreateChannel, CreateGuild, Guild};
 use ozone_proto::{perms, Snowflake};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
@@ -166,99 +166,6 @@ pub async fn list_channels(
     Ok(Json(out))
 }
 
-// ───────────────────────────── Messages ─────────────────────────────
-
-/// `GET /channels/:channel_id/messages`
-pub async fn list_messages(
-    State(st): State<AppState>,
-    user: AuthUser,
-    Path(channel_id): Path<String>,
-) -> AppResult<Json<Vec<Message>>> {
-    let cid = parse_i64(&channel_id)?;
-    pg::require_channel_perm(
-        &st.pool,
-        cid,
-        user.id.as_i64(),
-        perms::VIEW_CHANNEL | perms::READ_MESSAGE_HISTORY,
-    )
-    .await?;
-    let rows = sqlx::query(
-        "SELECT m.id, m.channel_id, m.author_id, m.content, m.type AS kind, m.nonce, m.created_at, m.edited_at, \
-                u.username, u.display_name, u.avatar_id \
-         FROM messages m JOIN users u ON u.id = m.author_id \
-         WHERE m.channel_id = ? ORDER BY m.id DESC LIMIT 50",
-    )
-    .bind(cid)
-    .fetch_all(&st.pool)
-    .await?;
-    let mut messages: Vec<Message> = rows.into_iter().map(row_to_message).collect();
-    messages.reverse();
-    Ok(Json(messages))
-}
-
-/// `POST /channels/:channel_id/messages`
-pub async fn create_message(
-    State(st): State<AppState>,
-    user: AuthUser,
-    Path(channel_id): Path<String>,
-    Json(req): Json<CreateMessage>,
-) -> AppResult<Json<Message>> {
-    let cid = parse_i64(&channel_id)?;
-    pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
-    let content = req.content.trim_end();
-    if content.is_empty() || content.chars().count() > 4000 {
-        return Err(AppError::bad_request(
-            "contenu de message invalide (1 à 4000 caractères)",
-        ));
-    }
-    let id = st.ids.next();
-    let now = now_ms();
-    sqlx::query(
-        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, created_at, edited_at) VALUES (?, ?, ?, ?, 0, ?, ?, NULL)",
-    )
-    .bind(id.as_i64())
-    .bind(cid)
-    .bind(user.id.as_i64())
-    .bind(content)
-    .bind(req.nonce.as_deref())
-    .bind(now)
-    .execute(&st.pool)
-    .await?;
-
-    let author = fetch_user(&st, user.id).await?;
-    let msg = Message {
-        id,
-        channel_id: Snowflake::from_i64(cid),
-        author,
-        content: content.to_string(),
-        kind: 0,
-        created_at: now as u64,
-        edited_at: None,
-        nonce: req.nonce.clone(),
-    };
-    let _ = st.hub.send(HubEvent {
-        t: "MESSAGE_CREATE".into(),
-        d: serde_json::to_value(&msg).unwrap_or_default(),
-    });
-    Ok(Json(msg))
-}
-
-// ───────────────────────────── Helpers ─────────────────────────────
-
-async fn fetch_user(st: &AppState, id: Snowflake) -> AppResult<User> {
-    let row = sqlx::query("SELECT username, display_name, avatar_id FROM users WHERE id = ?")
-        .bind(id.as_i64())
-        .fetch_one(&st.pool)
-        .await?;
-    Ok(User {
-        id,
-        username: row.get("username"),
-        display_name: row.get("display_name"),
-        avatar_id: row.get("avatar_id"),
-        email: None,
-    })
-}
-
 fn row_to_channel(r: SqliteRow) -> Channel {
     Channel {
         id: Snowflake::from_i64(r.get::<i64, _>("id")),
@@ -270,24 +177,5 @@ fn row_to_channel(r: SqliteRow) -> Channel {
         parent_id: r
             .get::<Option<i64>, _>("parent_id")
             .map(Snowflake::from_i64),
-    }
-}
-
-fn row_to_message(r: SqliteRow) -> Message {
-    Message {
-        id: Snowflake::from_i64(r.get::<i64, _>("id")),
-        channel_id: Snowflake::from_i64(r.get::<i64, _>("channel_id")),
-        author: User {
-            id: Snowflake::from_i64(r.get::<i64, _>("author_id")),
-            username: r.get("username"),
-            display_name: r.get("display_name"),
-            avatar_id: r.get("avatar_id"),
-            email: None,
-        },
-        content: r.get("content"),
-        kind: r.get::<i64, _>("kind") as u8,
-        created_at: r.get::<i64, _>("created_at") as u64,
-        edited_at: r.get::<Option<i64>, _>("edited_at").map(|v| v as u64),
-        nonce: r.get("nonce"),
     }
 }

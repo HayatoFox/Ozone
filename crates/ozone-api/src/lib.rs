@@ -13,6 +13,7 @@ pub mod routes_auth;
 pub mod routes_chat;
 pub mod routes_guild;
 pub mod routes_instance;
+pub mod routes_messages;
 pub mod routes_roles;
 pub mod state;
 pub mod util;
@@ -47,7 +48,31 @@ pub fn build_app(state: AppState) -> Router {
         )
         .route(
             "/channels/:channel_id/messages",
-            get(routes_chat::list_messages).post(routes_chat::create_message),
+            get(routes_messages::list_messages).post(routes_messages::create_message),
+        )
+        .route(
+            "/channels/:channel_id/messages/bulk-delete",
+            post(routes_messages::bulk_delete),
+        )
+        .route(
+            "/channels/:channel_id/messages/:message_id",
+            patch(routes_messages::edit_message).delete(routes_messages::delete_message),
+        )
+        .route(
+            "/channels/:channel_id/messages/:message_id/reactions/:emoji/@me",
+            put(routes_messages::add_reaction).delete(routes_messages::remove_reaction),
+        )
+        .route(
+            "/channels/:channel_id/pins",
+            get(routes_messages::list_pins),
+        )
+        .route(
+            "/channels/:channel_id/pins/:message_id",
+            put(routes_messages::pin_message).delete(routes_messages::unpin_message),
+        )
+        .route(
+            "/channels/:channel_id/typing",
+            post(routes_messages::typing),
         )
         // Rôles & permissions
         .route(

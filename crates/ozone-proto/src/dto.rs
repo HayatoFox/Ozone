@@ -146,6 +146,15 @@ pub struct CreateChannel {
     pub topic: Option<String>,
 }
 
+/// Agrégat de réaction sur un message.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Reaction {
+    pub emoji: String,
+    pub count: i64,
+    /// `true` si l'utilisateur courant a réagi.
+    pub me: bool,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub id: Snowflake,
@@ -156,6 +165,13 @@ pub struct Message {
     pub kind: u8,
     pub created_at: u64,
     pub edited_at: Option<u64>,
+    pub pinned: bool,
+    #[serde(default)]
+    pub reactions: Vec<Reaction>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reference_id: Option<Snowflake>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub referenced_message: Option<Box<Message>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
 }
@@ -166,6 +182,19 @@ pub struct CreateMessage {
     /// Déduplication du rendu optimiste côté client.
     #[serde(default)]
     pub nonce: Option<String>,
+    /// Identifiant du message auquel on répond.
+    #[serde(default)]
+    pub reply_to: Option<Snowflake>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EditMessage {
+    pub content: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct BulkDelete {
+    pub messages: Vec<Snowflake>,
 }
 
 // ──────────────────────────── Rôles & permissions ────────────────────────────
