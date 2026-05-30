@@ -1,19 +1,22 @@
-//! Routes guildes / salons / messages (socle Phase 1). Diffuse `MESSAGE_CREATE` via la Gateway.
+//! Routes guildes / salons / messages. Applique les permissions (cf. permissions.rs).
+//! Diffuse `MESSAGE_CREATE` via la Gateway.
 
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
+use crate::permissions as pg;
 use crate::state::{AppState, HubEvent};
+use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
 use ozone_proto::dto::{Channel, CreateChannel, CreateGuild, CreateMessage, Guild, Message, User};
-use ozone_proto::Snowflake;
+use ozone_proto::{perms, Snowflake};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
 // ───────────────────────────── Guildes ─────────────────────────────
 
-/// `POST /guilds` — crée une guilde (+ un salon « général » par défaut).
+/// `POST /guilds` — crée une guilde (+ rôle @everyone + salon « général »).
 pub async fn create_guild(
     State(st): State<AppState>,
     user: AuthUser,
@@ -33,6 +36,17 @@ pub async fn create_guild(
     .bind(id.as_i64())
     .bind(name)
     .bind(user.id.as_i64())
+    .bind(now)
+    .execute(&st.pool)
+    .await?;
+    // Rôle @everyone (id = guild_id), permissions par défaut.
+    sqlx::query(
+        "INSERT INTO roles (id, guild_id, name, color, hoist, position, permissions, mentionable, managed, created_at) \
+         VALUES (?, ?, '@everyone', 0, 0, 0, ?, 0, 1, ?)",
+    )
+    .bind(id.as_i64())
+    .bind(id.as_i64())
+    .bind(perms::DEFAULT_EVERYONE as i64)
     .bind(now)
     .execute(&st.pool)
     .await?;
@@ -94,8 +108,8 @@ pub async fn create_channel(
     Path(guild_id): Path<String>,
     Json(req): Json<CreateChannel>,
 ) -> AppResult<Json<Channel>> {
-    let gid = parse_id(&guild_id)?;
-    ensure_member(&st, gid, user.id).await?;
+    let gid = parse_i64(&guild_id)?;
+    pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_CHANNELS).await?;
     let name = req.name.trim();
     if name.is_empty() || name.chars().count() > 100 {
         return Err(AppError::bad_request("nom de salon invalide"));
@@ -105,7 +119,7 @@ pub async fn create_channel(
         "INSERT INTO channels (id, guild_id, type, name, topic, position, parent_id, created_at) VALUES (?, ?, ?, ?, ?, 0, NULL, ?)",
     )
     .bind(id.as_i64())
-    .bind(gid.as_i64())
+    .bind(gid)
     .bind(req.kind as i64)
     .bind(name)
     .bind(req.topic.as_deref())
@@ -114,7 +128,7 @@ pub async fn create_channel(
     .await?;
     Ok(Json(Channel {
         id,
-        guild_id: Some(gid),
+        guild_id: Some(Snowflake::from_i64(gid)),
         kind: req.kind,
         name: name.to_string(),
         topic: req.topic,
@@ -123,21 +137,33 @@ pub async fn create_channel(
     }))
 }
 
-/// `GET /guilds/:guild_id/channels`
+/// `GET /guilds/:guild_id/channels` — uniquement les salons visibles par l'utilisateur.
 pub async fn list_channels(
     State(st): State<AppState>,
     user: AuthUser,
     Path(guild_id): Path<String>,
 ) -> AppResult<Json<Vec<Channel>>> {
-    let gid = parse_id(&guild_id)?;
-    ensure_member(&st, gid, user.id).await?;
+    let gid = parse_i64(&guild_id)?;
+    pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::VIEW_CHANNEL).await?;
+    let owner = pg::guild_owner(&st.pool, gid)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
     let rows = sqlx::query(
         "SELECT id, guild_id, type AS kind, name, topic, position, parent_id FROM channels WHERE guild_id = ? ORDER BY position, id",
     )
-    .bind(gid.as_i64())
+    .bind(gid)
     .fetch_all(&st.pool)
     .await?;
-    Ok(Json(rows.into_iter().map(row_to_channel).collect()))
+    let mut out = Vec::new();
+    for r in rows {
+        let ch = row_to_channel(r);
+        let p =
+            pg::channel_permissions(&st.pool, gid, owner, ch.id.as_i64(), user.id.as_i64()).await?;
+        if perms::has(p, perms::VIEW_CHANNEL) {
+            out.push(ch);
+        }
+    }
+    Ok(Json(out))
 }
 
 // ───────────────────────────── Messages ─────────────────────────────
@@ -148,19 +174,25 @@ pub async fn list_messages(
     user: AuthUser,
     Path(channel_id): Path<String>,
 ) -> AppResult<Json<Vec<Message>>> {
-    let cid = parse_id(&channel_id)?;
-    ensure_channel_access(&st, cid, user.id).await?;
+    let cid = parse_i64(&channel_id)?;
+    pg::require_channel_perm(
+        &st.pool,
+        cid,
+        user.id.as_i64(),
+        perms::VIEW_CHANNEL | perms::READ_MESSAGE_HISTORY,
+    )
+    .await?;
     let rows = sqlx::query(
         "SELECT m.id, m.channel_id, m.author_id, m.content, m.type AS kind, m.nonce, m.created_at, m.edited_at, \
                 u.username, u.display_name, u.avatar_id \
          FROM messages m JOIN users u ON u.id = m.author_id \
          WHERE m.channel_id = ? ORDER BY m.id DESC LIMIT 50",
     )
-    .bind(cid.as_i64())
+    .bind(cid)
     .fetch_all(&st.pool)
     .await?;
     let mut messages: Vec<Message> = rows.into_iter().map(row_to_message).collect();
-    messages.reverse(); // ordre chronologique
+    messages.reverse();
     Ok(Json(messages))
 }
 
@@ -171,8 +203,8 @@ pub async fn create_message(
     Path(channel_id): Path<String>,
     Json(req): Json<CreateMessage>,
 ) -> AppResult<Json<Message>> {
-    let cid = parse_id(&channel_id)?;
-    ensure_channel_access(&st, cid, user.id).await?;
+    let cid = parse_i64(&channel_id)?;
+    pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
     let content = req.content.trim_end();
     if content.is_empty() || content.chars().count() > 4000 {
         return Err(AppError::bad_request(
@@ -185,7 +217,7 @@ pub async fn create_message(
         "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, created_at, edited_at) VALUES (?, ?, ?, ?, 0, ?, ?, NULL)",
     )
     .bind(id.as_i64())
-    .bind(cid.as_i64())
+    .bind(cid)
     .bind(user.id.as_i64())
     .bind(content)
     .bind(req.nonce.as_deref())
@@ -196,7 +228,7 @@ pub async fn create_message(
     let author = fetch_user(&st, user.id).await?;
     let msg = Message {
         id,
-        channel_id: cid,
+        channel_id: Snowflake::from_i64(cid),
         author,
         content: content.to_string(),
         kind: 0,
@@ -204,7 +236,6 @@ pub async fn create_message(
         edited_at: None,
         nonce: req.nonce.clone(),
     };
-    // Fan-out temps réel vers les sessions Gateway.
     let _ = st.hub.send(HubEvent {
         t: "MESSAGE_CREATE".into(),
         d: serde_json::to_value(&msg).unwrap_or_default(),
@@ -213,12 +244,6 @@ pub async fn create_message(
 }
 
 // ───────────────────────────── Helpers ─────────────────────────────
-
-fn parse_id(s: &str) -> AppResult<Snowflake> {
-    s.parse::<u64>()
-        .map(Snowflake::new)
-        .map_err(|_| AppError::bad_request("identifiant invalide"))
-}
 
 async fn fetch_user(st: &AppState, id: Snowflake) -> AppResult<User> {
     let row = sqlx::query("SELECT username, display_name, avatar_id FROM users WHERE id = ?")
@@ -232,32 +257,6 @@ async fn fetch_user(st: &AppState, id: Snowflake) -> AppResult<User> {
         avatar_id: row.get("avatar_id"),
         email: None,
     })
-}
-
-async fn ensure_member(st: &AppState, gid: Snowflake, uid: Snowflake) -> AppResult<()> {
-    let ok = sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = ? AND user_id = ?")
-        .bind(gid.as_i64())
-        .bind(uid.as_i64())
-        .fetch_optional(&st.pool)
-        .await?;
-    if ok.is_none() {
-        return Err(AppError::forbidden(
-            "vous n'êtes pas membre de cette guilde",
-        ));
-    }
-    Ok(())
-}
-
-async fn ensure_channel_access(st: &AppState, cid: Snowflake, uid: Snowflake) -> AppResult<()> {
-    let row = sqlx::query("SELECT guild_id FROM channels WHERE id = ?")
-        .bind(cid.as_i64())
-        .fetch_optional(&st.pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("salon introuvable"))?;
-    match row.get::<Option<i64>, _>("guild_id") {
-        Some(g) => ensure_member(st, Snowflake::from_i64(g), uid).await,
-        None => Ok(()), // MP : accès géré ailleurs (hors socle Phase 1)
-    }
 }
 
 fn row_to_channel(r: SqliteRow) -> Channel {

@@ -167,3 +167,92 @@ pub struct CreateMessage {
     #[serde(default)]
     pub nonce: Option<String>,
 }
+
+// ──────────────────────────── Rôles & permissions ────────────────────────────
+
+/// Bitfields de permission sérialisés en **chaîne** (un `u64` dépasse la précision JS).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Role {
+    pub id: Snowflake,
+    pub guild_id: Snowflake,
+    pub name: String,
+    pub color: u32,
+    pub hoist: bool,
+    pub position: i32,
+    pub permissions: String,
+    pub mentionable: bool,
+    pub managed: bool,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CreateRole {
+    pub name: Option<String>,
+    pub color: Option<u32>,
+    pub hoist: Option<bool>,
+    pub permissions: Option<String>,
+    pub mentionable: Option<bool>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateRole {
+    pub name: Option<String>,
+    pub color: Option<u32>,
+    pub hoist: Option<bool>,
+    pub permissions: Option<String>,
+    pub mentionable: Option<bool>,
+}
+
+/// Surcharge de permissions au niveau d'un salon (`type` : 0 = rôle, 1 = membre).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PermissionOverwrite {
+    pub id: Snowflake,
+    #[serde(rename = "type")]
+    pub kind: u8,
+    pub allow: String,
+    pub deny: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetOverwrite {
+    #[serde(rename = "type")]
+    pub kind: u8,
+    #[serde(default)]
+    pub allow: Option<String>,
+    #[serde(default)]
+    pub deny: Option<String>,
+}
+
+// ──────────────────────────────── Membres ────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Member {
+    pub user: User,
+    pub nick: Option<String>,
+    pub roles: Vec<Snowflake>,
+    pub joined_at: u64,
+}
+
+// ──────────────────────────────── Invitations ────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Invite {
+    pub code: String,
+    pub guild_id: Snowflake,
+    pub channel_id: Option<Snowflake>,
+    pub inviter_id: Snowflake,
+    pub uses: i32,
+    pub max_uses: i32,
+    pub max_age: i64,
+    pub created_at: u64,
+    pub expires_at: Option<u64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CreateInvite {
+    /// 0 = illimité.
+    #[serde(default)]
+    pub max_uses: i32,
+    /// Durée de validité en secondes (0 = jamais).
+    #[serde(default)]
+    pub max_age: i64,
+}

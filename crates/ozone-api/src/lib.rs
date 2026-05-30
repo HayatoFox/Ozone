@@ -8,12 +8,16 @@ pub mod db;
 pub mod error;
 pub mod extract;
 pub mod gateway;
+pub mod permissions;
 pub mod routes_auth;
 pub mod routes_chat;
+pub mod routes_guild;
 pub mod routes_instance;
+pub mod routes_roles;
 pub mod state;
+pub mod util;
 
-use axum::routing::{get, post};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use config::Config;
 use state::AppState;
@@ -45,6 +49,34 @@ pub fn build_app(state: AppState) -> Router {
             "/channels/:channel_id/messages",
             get(routes_chat::list_messages).post(routes_chat::create_message),
         )
+        // Rôles & permissions
+        .route(
+            "/guilds/:guild_id/roles",
+            get(routes_roles::list_roles).post(routes_roles::create_role),
+        )
+        .route(
+            "/guilds/:guild_id/roles/:role_id",
+            patch(routes_roles::update_role).delete(routes_roles::delete_role),
+        )
+        .route(
+            "/guilds/:guild_id/members/:user_id/roles/:role_id",
+            put(routes_roles::add_member_role).delete(routes_roles::remove_member_role),
+        )
+        .route(
+            "/channels/:channel_id/permissions/:overwrite_id",
+            put(routes_roles::set_overwrite).delete(routes_roles::delete_overwrite),
+        )
+        // Membres & invitations
+        .route("/guilds/:guild_id/members", get(routes_guild::list_members))
+        .route(
+            "/guilds/:guild_id/members/:user_id",
+            delete(routes_guild::kick_member),
+        )
+        .route(
+            "/guilds/:guild_id/invites",
+            get(routes_guild::list_invites).post(routes_guild::create_invite),
+        )
+        .route("/invites/:code", post(routes_guild::join_invite))
         // Gateway temps réel
         .route("/gateway", get(gateway::ws_handler))
         .with_state(state)

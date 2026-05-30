@@ -6,6 +6,7 @@
 pub mod dto;
 pub mod gateway;
 pub mod ids;
+pub mod perms;
 
 pub use dto::*;
 pub use ids::{Snowflake, SnowflakeGenerator, OZONE_EPOCH_MS};
