@@ -56,9 +56,11 @@ fn row_to_message_basic(r: SqliteRow) -> Message {
     }
 }
 
-async fn fetch_message_basic(st: &AppState, mid: i64) -> AppResult<Option<Message>> {
-    let row = sqlx::query(&format!("{MSG_SELECT} WHERE m.id = ?"))
+/// Récupère un message **dans un salon donné** (pour inliner le message cité sans fuite inter-salons).
+async fn fetch_referenced(st: &AppState, cid: i64, mid: i64) -> AppResult<Option<Message>> {
+    let row = sqlx::query(&format!("{MSG_SELECT} WHERE m.id = ? AND m.channel_id = ?"))
         .bind(mid)
+        .bind(cid)
         .fetch_optional(&st.pool)
         .await?;
     Ok(row.map(row_to_message_basic))
@@ -112,7 +114,7 @@ async fn hydrate(st: &AppState, mut msg: Message, user_id: i64) -> AppResult<Mes
         msg.reactions = rs.clone();
     }
     if let Some(ref_id) = msg.reference_id {
-        msg.referenced_message = fetch_message_basic(st, ref_id.as_i64())
+        msg.referenced_message = fetch_referenced(st, msg.channel_id.as_i64(), ref_id.as_i64())
             .await?
             .map(Box::new);
     }
@@ -207,7 +209,7 @@ pub async fn list_messages(
             m.reactions = rs.clone();
         }
         if let Some(ref_id) = m.reference_id {
-            m.referenced_message = fetch_message_basic(&st, ref_id.as_i64())
+            m.referenced_message = fetch_referenced(&st, m.channel_id.as_i64(), ref_id.as_i64())
                 .await?
                 .map(Box::new);
         }
@@ -363,6 +365,11 @@ pub async fn bulk_delete(
 ) -> AppResult<Json<serde_json::Value>> {
     let cid = parse_i64(&cid)?;
     pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::MANAGE_MESSAGES).await?;
+    if req.messages.is_empty() || req.messages.len() > 100 {
+        return Err(AppError::bad_request(
+            "entre 1 et 100 messages par suppression en masse",
+        ));
+    }
     let mut deleted = Vec::new();
     for m in &req.messages {
         let mid = m.as_i64();
@@ -404,6 +411,9 @@ pub async fn add_reaction(
         perms::VIEW_CHANNEL | perms::READ_MESSAGE_HISTORY | perms::ADD_REACTIONS,
     )
     .await?;
+    if emoji.is_empty() || emoji.chars().count() > 64 {
+        return Err(AppError::bad_request("emoji invalide"));
+    }
     fetch_message_in_channel(&st, cid, mid).await?; // existence
     sqlx::query("INSERT OR IGNORE INTO reactions (message_id, emoji, user_id, created_at) VALUES (?, ?, ?, ?)")
         .bind(mid)

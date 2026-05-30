@@ -284,12 +284,38 @@ pub async fn set_overwrite(
 ) -> AppResult<Json<PermissionOverwrite>> {
     let cid = parse_i64(&cid)?;
     let tid = parse_i64(&tid)?;
-    let (_gid, _owner, actor) =
+    let (gid, _owner, actor) =
         pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::MANAGE_ROLES).await?;
-    // On ne peut autoriser/refuser que des permissions qu'on possède dans le salon.
-    let allow = req.allow.as_deref().map(perms::parse).unwrap_or(0) & actor;
-    let deny = req.deny.as_deref().map(perms::parse).unwrap_or(0) & actor;
     let kind = req.kind;
+    // La cible doit appartenir à la guilde du salon (rôle ou membre).
+    let valid_target = match kind {
+        0 => sqlx::query("SELECT 1 FROM roles WHERE id = ? AND guild_id = ?")
+            .bind(tid)
+            .bind(gid)
+            .fetch_optional(&st.pool)
+            .await?
+            .is_some(),
+        1 => sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = ? AND user_id = ?")
+            .bind(gid)
+            .bind(tid)
+            .fetch_optional(&st.pool)
+            .await?
+            .is_some(),
+        _ => {
+            return Err(AppError::bad_request(
+                "type de surcharge invalide (0 = rôle, 1 = membre)",
+            ))
+        }
+    };
+    if !valid_target {
+        return Err(AppError::not_found(
+            "cible de surcharge introuvable dans la guilde",
+        ));
+    }
+    // On n'autorise/refuse que des permissions qu'on possède, et ADMINISTRATOR n'est pas surchargeable.
+    let mask = actor & !perms::ADMINISTRATOR;
+    let allow = req.allow.as_deref().map(perms::parse).unwrap_or(0) & mask;
+    let deny = req.deny.as_deref().map(perms::parse).unwrap_or(0) & mask;
     sqlx::query(
         "INSERT INTO channel_overwrites (channel_id, target_id, target_type, allow, deny) VALUES (?, ?, ?, ?, ?) \
          ON CONFLICT(channel_id, target_id) DO UPDATE SET target_type = excluded.target_type, allow = excluded.allow, deny = excluded.deny",
