@@ -11,6 +11,7 @@ pub mod gateway;
 pub mod permissions;
 pub mod routes_auth;
 pub mod routes_chat;
+pub mod routes_dms;
 pub mod routes_guild;
 pub mod routes_instance;
 pub mod routes_messages;
@@ -52,6 +53,15 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/users/@me/notes/:user_id",
             get(routes_relationships::get_note).put(routes_relationships::put_note),
+        )
+        // Messages privés & groupes
+        .route(
+            "/users/@me/channels",
+            get(routes_dms::list_dm_channels).post(routes_dms::open_or_create_dm),
+        )
+        .route(
+            "/channels/:channel_id/recipients/:user_id",
+            put(routes_dms::add_recipient).delete(routes_dms::remove_recipient),
         )
         // Guildes / salons / messages
         .route(

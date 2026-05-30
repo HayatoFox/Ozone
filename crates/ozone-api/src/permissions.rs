@@ -187,23 +187,96 @@ pub async fn require_guild_perm(
     Ok(p)
 }
 
-/// Exige une permission au niveau **salon** ; renvoie `(guild_id, owner_id, permissions)`.
+/// Permissions accordées dans un MP / groupe (aucune gestion de type serveur).
+pub const DM_PERMS: u64 = perms::VIEW_CHANNEL
+    | perms::SEND_MESSAGES
+    | perms::READ_MESSAGE_HISTORY
+    | perms::ADD_REACTIONS
+    | perms::EMBED_LINKS
+    | perms::ATTACH_FILES
+    | perms::USE_EXTERNAL_EMOJIS
+    | perms::USE_EXTERNAL_STICKERS
+    | perms::MENTION_EVERYONE
+    | perms::PIN_MESSAGES
+    | perms::SEND_VOICE_MESSAGES;
+
+/// Permissions effectives dans un salon de MP / groupe. `0` si l'utilisateur n'est pas
+/// destinataire. En MP 1:1, si l'un a bloqué l'autre, l'envoi est retiré (lecture seule).
+pub async fn dm_permissions(pool: &SqlitePool, channel_id: i64, user_id: i64) -> AppResult<u64> {
+    let is_recipient =
+        sqlx::query("SELECT 1 FROM dm_recipients WHERE channel_id = ? AND user_id = ?")
+            .bind(channel_id)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?
+            .is_some();
+    if !is_recipient {
+        return Ok(0);
+    }
+    let mut p = DM_PERMS;
+    let kind: i64 = sqlx::query("SELECT type FROM channels WHERE id = ?")
+        .bind(channel_id)
+        .fetch_one(pool)
+        .await?
+        .get("type");
+    if kind == 1 {
+        // MP 1:1 : retire l'envoi en cas de blocage dans un sens ou l'autre.
+        let other: Option<i64> = sqlx::query(
+            "SELECT user_id FROM dm_recipients WHERE channel_id = ? AND user_id <> ? LIMIT 1",
+        )
+        .bind(channel_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .map(|r| r.get("user_id"));
+        if let Some(other) = other {
+            let blocked = sqlx::query(
+                "SELECT 1 FROM relationships WHERE type = 'blocked' AND \
+                 ((user_id = ? AND target_id = ?) OR (user_id = ? AND target_id = ?))",
+            )
+            .bind(user_id)
+            .bind(other)
+            .bind(other)
+            .bind(user_id)
+            .fetch_optional(pool)
+            .await?
+            .is_some();
+            if blocked {
+                p &= !(perms::SEND_MESSAGES | perms::SEND_VOICE_MESSAGES | perms::ADD_REACTIONS);
+            }
+        }
+    }
+    Ok(p)
+}
+
+/// Exige une permission au niveau **salon** (guilde ou MP) ; renvoie `(guild_id, owner_id, permissions)`.
+/// Pour un MP / groupe, `guild_id` et `owner_id` valent `0`.
 pub async fn require_channel_perm(
     pool: &SqlitePool,
     channel_id: i64,
     user_id: i64,
     needed: u64,
 ) -> AppResult<(i64, i64, u64)> {
-    let guild_id = channel_guild(pool, channel_id)
+    let maybe_guild = channel_guild(pool, channel_id)
         .await?
-        .ok_or_else(|| AppError::not_found("salon introuvable"))?
-        .ok_or_else(|| AppError::forbidden("salon hors guilde"))?;
-    let owner = guild_owner(pool, guild_id)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
-    let p = channel_permissions(pool, guild_id, owner, channel_id, user_id).await?;
-    if !perms::has(p, needed) {
-        return Err(AppError::forbidden("permissions insuffisantes"));
+        .ok_or_else(|| AppError::not_found("salon introuvable"))?;
+    match maybe_guild {
+        Some(guild_id) => {
+            let owner = guild_owner(pool, guild_id)
+                .await?
+                .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+            let p = channel_permissions(pool, guild_id, owner, channel_id, user_id).await?;
+            if !perms::has(p, needed) {
+                return Err(AppError::forbidden("permissions insuffisantes"));
+            }
+            Ok((guild_id, owner, p))
+        }
+        None => {
+            let p = dm_permissions(pool, channel_id, user_id).await?;
+            if !perms::has(p, needed) {
+                return Err(AppError::forbidden("accès refusé à ce message privé"));
+            }
+            Ok((0, 0, p))
+        }
     }
-    Ok((guild_id, owner, p))
 }

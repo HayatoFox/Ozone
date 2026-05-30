@@ -80,5 +80,20 @@ Protections confirmées (`relationships.rs` + `security_s4.rs`) : relations stri
 
 > Note d'ingénierie : le harnais de test a aussi été durci (nom de base SQLite unique par **thread**) pour éliminer une **course** entre tests concurrents (horodatage ns identique sur l'horloge Windows) — stabilité CI, sans impact sécurité.
 
+## 7. S4b — Messages privés & groupes
+
+Cœur (intégration de l'accès MP dans `require_channel_perm`) par le mainteneur ; tests générés par des **sous-agents** en parallèle, puis intégrés et audités. Un bug **fonctionnel** (contrainte `NOT NULL channels.name` violée à l'ouverture d'un MP sans nom) a été trouvé à l'intégration et corrigé — sans impact sécurité. Revue adverse du mainteneur : **aucune faille exploitable** ; un test de durcissement a été ajouté (IDOR sur `GET /channels/:id`, immuabilité d'un MP 1:1).
+
+| Vecteur testé | Test (`security_s4b.rs`) | Résultat |
+|---|---|---|
+| Non-destinataire lit / envoie dans un MP | `non_recipient_cannot_read_or_send` | `403` |
+| Non-membre ajoute au groupe | `non_recipient_cannot_add_to_group` | `403` |
+| Membre non-propriétaire retire un autre / se retire soi-même | `non_owner_cannot_remove_other_member` | `403` / `200` |
+| Utilisateur **bloqué** envoie en MP 1:1 | `blocked_user_cannot_send_in_dm` | `403` (lecture seule) |
+| Isolation de la liste des MP | `dm_listing_isolation` | liste vide |
+| IDOR `GET /channels/:id` + ajout sur un MP 1:1 | `dm_channel_idor_and_one_to_one_is_immutable` | `403` / `400` |
+
+Protections structurelles : accès MP/groupe réservé aux **destinataires** (intégré dans `require_channel_perm` → un non-destinataire obtient `0` permission), retrait d'un tiers **réservé au propriétaire**, blocage = **lecture seule** en 1:1 (inactif en groupe, parité Discord assumée), taille de groupe bornée (10), transfert automatique de propriété au départ du propriétaire.
+
 ---
-*Document vivant — revue effectuée pour S1 → S4 ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S4 (relations + MP/groupes) ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*

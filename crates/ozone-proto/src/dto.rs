@@ -366,3 +366,23 @@ pub struct AddRelationship {
 pub struct UpdateNote {
     pub note: String,
 }
+
+// ──────────────────────────── Messages privés / groupes ────────────────────────────
+
+/// Salon de MP : `type` 1 = privé (1:1), 3 = groupe.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DMChannel {
+    pub id: Snowflake,
+    #[serde(rename = "type")]
+    pub kind: u8,
+    pub name: Option<String>,
+    pub owner_id: Option<Snowflake>,
+    pub recipients: Vec<User>,
+    pub last_message_id: Option<Snowflake>,
+}
+
+/// Ouvre un MP (1 destinataire) ou crée un groupe (2 à 9 destinataires).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateDM {
+    pub recipients: Vec<Snowflake>,
+}
