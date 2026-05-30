@@ -1,0 +1,46 @@
+# Unité systemd pour une instance Ozone sur AlmaLinux/RHEL (ou Debian/Ubuntu).
+# Installation :
+#   sudo cp target/release/ozone-api /usr/local/bin/
+#   sudo useradd --system --home /var/lib/ozone --shell /sbin/nologin ozone
+#   sudo mkdir -p /var/lib/ozone && sudo chown ozone:ozone /var/lib/ozone
+#   sudo cp deploy/ozone-api.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now ozone-api
+#
+# Secrets (mot de passe d'instance, etc.) : de préférence via /etc/ozone/ozone.env (EnvironmentFile).
+
+[Unit]
+Description=Ozone — instance (API REST + Gateway)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ozone
+Group=ozone
+WorkingDirectory=/var/lib/ozone
+
+Environment=OZONE_BIND=127.0.0.1:8080
+Environment=OZONE_DB_PATH=/var/lib/ozone/ozone.db
+Environment=OZONE_INSTANCE_NAME=Mon Instance Ozone
+Environment=OZONE_REGISTRATION=open
+Environment=RUST_LOG=info
+# Décommenter pour charger les secrets (OZONE_INSTANCE_PASSWORD, etc.) depuis un fichier :
+# EnvironmentFile=/etc/ozone/ozone.env
+
+ExecStart=/usr/local/bin/ozone-api
+Restart=on-failure
+RestartSec=3
+
+# ── Durcissement ──
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/ozone
+PrivateTmp=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target

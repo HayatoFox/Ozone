@@ -1,0 +1,18 @@
+# Normalisation des fins de ligne : LF dans le dépôt (dev Windows → serveur Linux/AlmaLinux).
+* text=auto eol=lf
+
+# Scripts/fichiers qui DOIVENT rester en LF (exécutés sous Linux).
+*.sh        text eol=lf
+Dockerfile* text eol=lf
+*.service   text eol=lf
+*.yml       text eol=lf
+*.yaml      text eol=lf
+
+# Binaires (jamais de conversion).
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.woff binary
+*.woff2 binary

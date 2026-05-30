@@ -1,0 +1,13 @@
+[package]
+name = "ozone-ui"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Client natif Ozone (desktop). UI GPU (GPUI, repli Iced) à intégrer — cf. docs/02-stack-technique.md."
+
+[[bin]]
+name = "ozone"
+path = "src/main.rs"
+
+[dependencies]
+ozone-core = { path = "../ozone-core" }

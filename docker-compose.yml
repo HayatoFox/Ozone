@@ -1,0 +1,63 @@
+# Démarrage d'une instance Ozone.
+#
+#   docker compose up --build            → instance « tout-en-un » (SQLite), prête à l'emploi
+#   docker compose --profile full up     → + Postgres/Redis/NATS/MinIO (futur mode full-stack)
+#
+# Le binaire actuel utilise SQLite (zéro dépendance externe). Les services du profil `full`
+# sont fournis pour la montée en charge décrite dans docs/01-architecture.md.
+
+services:
+  ozone:
+    build: .
+    image: ozone/ozone-api:dev
+    ports:
+      - "8080:8080"
+    environment:
+      OZONE_BIND: "0.0.0.0:8080"
+      OZONE_DB_PATH: "/data/ozone.db"
+      OZONE_INSTANCE_NAME: "${OZONE_INSTANCE_NAME:-Mon Instance Ozone}"
+      OZONE_REGISTRATION: "${OZONE_REGISTRATION:-open}"
+      # OZONE_INSTANCE_PASSWORD: "change-moi"   # décommenter pour protéger l'accès à l'instance
+      RUST_LOG: "info"
+    volumes:
+      - ozone-data:/data
+    restart: unless-stopped
+
+  # ─────────── Profil « full » : infrastructure pour la montée en charge (non utilisée par le tout-en-un) ───────────
+  postgres:
+    image: postgres:16-alpine
+    profiles: ["full"]
+    environment:
+      POSTGRES_USER: ozone
+      POSTGRES_PASSWORD: ozone
+      POSTGRES_DB: ozone
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    ports: ["5432:5432"]
+
+  redis:
+    image: redis:7-alpine
+    profiles: ["full"]
+    ports: ["6379:6379"]
+
+  nats:
+    image: nats:2-alpine
+    profiles: ["full"]
+    command: ["-js"]
+    ports: ["4222:4222"]
+
+  minio:
+    image: minio/minio:latest
+    profiles: ["full"]
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ozone
+      MINIO_ROOT_PASSWORD: ozone-secret
+    volumes:
+      - minio-data:/data
+    ports: ["9000:9000", "9001:9001"]
+
+volumes:
+  ozone-data:
+  pg-data:
+  minio-data:

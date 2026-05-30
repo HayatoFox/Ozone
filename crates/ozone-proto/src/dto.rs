@@ -1,0 +1,169 @@
+//! DTOs de l'API REST : instance, authentification, entités. Cf. `docs/04-api-rest.md`.
+
+use crate::ids::Snowflake;
+use serde::{Deserialize, Serialize};
+
+// ───────────────────────────── Instance ─────────────────────────────
+
+/// Politique d'inscription d'une instance (cf. `docs/features/00-instances.md`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RegistrationPolicy {
+    Open,
+    Invite,
+    Closed,
+}
+
+impl RegistrationPolicy {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            RegistrationPolicy::Open => "open",
+            RegistrationPolicy::Invite => "invite",
+            RegistrationPolicy::Closed => "closed",
+        }
+    }
+    pub fn parse(s: &str) -> Self {
+        match s {
+            "invite" => RegistrationPolicy::Invite,
+            "closed" => RegistrationPolicy::Closed,
+            _ => RegistrationPolicy::Open,
+        }
+    }
+}
+
+/// Indique si l'instance est protégée par un mot de passe d'instance.
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+pub struct AccessGate {
+    pub required: bool,
+}
+
+/// Métadonnées **publiques** d'une instance (réponse de `GET /instance`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstanceInfo {
+    pub instance_id: Snowflake,
+    pub name: String,
+    pub description: Option<String>,
+    pub accent_color: Option<u32>,
+    pub version: String,
+    pub registration_policy: RegistrationPolicy,
+    pub access_gate: AccessGate,
+}
+
+// ──────────────────────────── Authentification ───────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RegisterRequest {
+    pub username: String,
+    pub email: String,
+    pub password: String,
+    #[serde(default)]
+    pub display_name: Option<String>,
+    /// Jeton de gate (si l'instance est protégée par mot de passe).
+    #[serde(default)]
+    pub gate_token: Option<String>,
+    /// Code d'invitation d'instance (si politique `invite`).
+    #[serde(default)]
+    pub invite_code: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LoginRequest {
+    /// E-mail ou pseudo.
+    pub login: String,
+    pub password: String,
+    #[serde(default)]
+    pub gate_token: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GateRequest {
+    pub password: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GateResponse {
+    pub gate_token: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RefreshRequest {
+    pub refresh_token: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TokenPair {
+    pub access_token: String,
+    pub refresh_token: String,
+    pub token_type: String,
+    pub expires_in: u64,
+}
+
+// ──────────────────────────────── Entités ────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct User {
+    pub id: Snowflake,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_id: Option<String>,
+    /// Présent uniquement pour `users/@me`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub email: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Guild {
+    pub id: Snowflake,
+    pub name: String,
+    pub owner_id: Snowflake,
+    pub icon_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateGuild {
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Channel {
+    pub id: Snowflake,
+    pub guild_id: Option<Snowflake>,
+    /// Type de salon (0 = texte, 2 = vocal, … cf. `docs/features/03-salons.md`).
+    #[serde(rename = "type")]
+    pub kind: u8,
+    pub name: String,
+    pub topic: Option<String>,
+    pub position: i32,
+    pub parent_id: Option<Snowflake>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateChannel {
+    pub name: String,
+    #[serde(rename = "type", default)]
+    pub kind: u8,
+    #[serde(default)]
+    pub topic: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Message {
+    pub id: Snowflake,
+    pub channel_id: Snowflake,
+    pub author: User,
+    pub content: String,
+    #[serde(rename = "type")]
+    pub kind: u8,
+    pub created_at: u64,
+    pub edited_at: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub nonce: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateMessage {
+    pub content: String,
+    /// Déduplication du rendu optimiste côté client.
+    #[serde(default)]
+    pub nonce: Option<String>,
+}

@@ -1,0 +1,27 @@
+# Rust
+/target
+**/*.rs.bk
+Cargo.lock.bak
+
+# Bases de données locales (mode tout-en-un / dev)
+*.db
+*.db-shm
+*.db-wal
+/data
+
+# Secrets & env
+.env
+.env.local
+
+# Médias locaux
+/storage
+
+# Réglages locaux Claude Code (personnels)
+.claude/settings.local.json
+
+# OS / éditeurs
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.log

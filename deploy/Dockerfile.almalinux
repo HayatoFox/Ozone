@@ -1,0 +1,25 @@
+# Image de l'instance Ozone basée sur AlmaLinux 9 (compatible RHEL).
+# Build :   docker build -f deploy/Dockerfile.almalinux -t ozone/ozone-api:alma .
+#
+# À utiliser si vous voulez une image base RHEL-family (sinon le Dockerfile Debian
+# de la racine tourne tout aussi bien sur un hôte AlmaLinux).
+
+FROM almalinux:9 AS builder
+RUN dnf -y install gcc && dnf clean all
+# Toolchain Rust (rustup, profil minimal)
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH="/root/.cargo/bin:${PATH}"
+WORKDIR /app
+COPY . .
+RUN cargo build --release -p ozone-api
+
+FROM almalinux:9
+RUN useradd -m -u 10001 ozone && mkdir -p /data && chown ozone:ozone /data
+COPY --from=builder /app/target/release/ozone-api /usr/local/bin/ozone-api
+USER ozone
+ENV OZONE_BIND=0.0.0.0:8080 \
+    OZONE_DB_PATH=/data/ozone.db \
+    RUST_LOG=info
+VOLUME ["/data"]
+EXPOSE 8080
+CMD ["ozone-api"]
