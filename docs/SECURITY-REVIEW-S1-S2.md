@@ -540,5 +540,19 @@ Reconnexion après coupure **sans re-IDENTIFY ni perte d'événement** : chaque 
 |---|---|---|
 | R9 — accumulation d'acteurs de session pendant la grâce (connexions/déconnexions rapides) | Faible | Suivi → plafond de sessions par utilisateur + rate-limit IDENTIFY (futur) |
 
+## 34. S32 — UI native Iced (fondation client)
+
+Premier écran (connexion à une instance) + vues guildes/salons/messages, en architecture **Elm**, branchées sur `ozone_core::ApiClient` (déjà audité §30). Écrit et audité par le mainteneur. **Aucune faille exploitable.** *(Validation visuelle/interactions hors portée headless : se fait en exécutant le binaire.)*
+
+| Vecteur examiné | Posture |
+|---|---|
+| Injection via contenu de message (équivalent XSS) | **N/A par construction** : le rendu est du **texte brut** (widget `text`, glyphes GPU) — aucun markup/HTML/script n'est interprété. Un message hostile s'affiche **inerte**. |
+| Transport en clair | L'adresse saisie passe par `InstanceRef::api_base` ⇒ **HTTPS forcé** sauf `http://` explicite. Le défaut `http://127.0.0.1:8080` est une **commodité de dev** (à durcir pour une distribution : défaut vide/HTTPS). |
+| Jetons / mot de passe en mémoire | Jeton d'accès en mémoire (`ApiClient`), **non persisté** par l'UI ; le **mot de passe est effacé** après connexion réussie. *(Futurs durcissements : type `zeroize`, stockage chiffré au repos via le registre d'instances.)* |
+| Surface réseau / SQL / FS / `unsafe` | Aucune nouvelle : les `Task` réutilisent `ApiClient` ; pas de SQL/FS/`unsafe` dans l'UI. |
+| Fuite d'erreurs | La barre de statut affiche les erreurs de l'API pour **la session de l'utilisateur lui-même** — pas de fuite tierce. |
+
+Tests : 5 unitaires du réducteur `update` (validation du formulaire, transitions d'écran, sélections guilde/salon, retour à l'écran de connexion sur échec) — exécutables **sans fenêtre** (les `Task` async ne tournent pas hors runtime Iced).
+
 ---
-*Document vivant — revue effectuée pour S1 → S31 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons (registre d'instances), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S32 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), temps réel dans l'UI (subscription Gateway), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

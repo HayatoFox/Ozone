@@ -3,7 +3,7 @@ name = "ozone-ui"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
-description = "Client natif Ozone (desktop). UI GPU (GPUI, repli Iced) à intégrer — cf. docs/02-stack-technique.md."
+description = "Client natif Ozone (desktop) — UI Iced (GPU/wgpu), branchée sur ozone-core. Cf. docs/11-client.md."
 
 [[bin]]
 name = "ozone"
@@ -11,3 +11,6 @@ path = "src/main.rs"
 
 [dependencies]
 ozone-core = { path = "../ozone-core" }
+# UI native GPU. `tokio` : exécute les Task async (reqwest/WS d'ozone-core) sur le réacteur tokio.
+# `ring` est tiré côté client (rustls/wgpu) — acceptable (≠ contrainte serveur). Cf. docs/11-client.md.
+iced = { version = "0.13", features = ["tokio"] }

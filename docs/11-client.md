@@ -27,7 +27,7 @@ ozone-core    logique client multiplateforme :
               - Cache local (SQLite + rétention bornée)         ← fait (S29 ; persiste/réhydrate, plafonds mémoire+disque, testé)
               - Session (orchestrateur : auth+bootstrap+temps réel+cache+reconnexion auto)  ← fait (S30/S31 ; API haut niveau pour l'UI, testé E2E)
               - Moteur vocal (signalisation + WebRTC client)   ← à faire (pair du SFU)
-ozone-ui      application Iced (vues, thèmes, navigation)      ← à faire
+ozone-ui      application Iced (vues, thèmes, navigation)      ← fondation faite (S32 ; connexion + guildes/salons/messages, réducteur testé)
 ```
 
 > **Crypto côté client** : `reqwest`/`rustls` (et la pile WebRTC) tirent `ring` — **acceptable côté
@@ -41,9 +41,9 @@ reverse-proxy peut exposer l'API sous un préfixe (l'inclure alors dans l'adress
 
 ## Prochaines étapes
 
-1. `ozone-ui` (Iced) : écran de connexion à une instance (adresse + gate), switcher multi-instances,
-   liste guildes/salons, fil de messages (alimenté par le `Store`/cache), MP, présence, paramètres/thèmes.
-   *(Nécessite un environnement graphique pour itérer/valider visuellement.)*
+1. `ozone-ui` — étoffer la fondation (S32) : **temps réel** dans l'UI (subscription Gateway →
+   `Store`/`Session`), switcher **multi-instances** + porte d'accès, MP, présence, **thèmes/effets**
+   soignés, gestion d'erreurs/chargement. *(Validation visuelle = exécuter le binaire.)*
 2. Moteur vocal client (signalisation via l'API → SFU `ozone-sfu`).
    *(Le plan de contrôle — jeton vocal + jointure SFU — est testable ; le média WebRTC nécessite de vrais pairs.)*
 

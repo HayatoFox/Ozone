@@ -1,18 +1,15 @@
-//! Client natif Ozone — placeholder.
+//! Client natif Ozone — application Iced.
 //!
-//! L'interface GPU (GPUI, repli Iced) sera branchée ici. Le tout premier écran sera la
-//! **connexion à une instance** (cf. `docs/features/00-instances.md`).
+//! Architecture **Elm** (`Message`/`update`/`view`) dans `app.rs`, branchée sur `ozone-core`
+//! (REST typé). Premier écran : **connexion à une instance** ; puis guildes/salons/messages.
+//! Cf. `docs/11-client.md`. Le temps réel (Gateway) et le vocal viendront ensuite.
 
-fn main() {
-    println!("┌──────────────────────────────────────────────┐");
-    println!("│  Ozone — client natif (placeholder)          │");
-    println!("└──────────────────────────────────────────────┘");
-    println!();
-    println!("Prochaine étape UI : écran de connexion à une instance.");
-    println!("  → docs/features/00-instances.md");
-    println!("UI GPU à intégrer (GPUI, repli Iced) : docs/02-stack-technique.md");
-    println!();
+mod app;
 
-    let demo = ozone_core::InstanceRef::new("ozone.exemple.fr");
-    println!("Démo cœur partagé — API base résolue : {}", demo.api_base());
+use app::App;
+
+fn main() -> iced::Result {
+    iced::application("Ozone", App::update, App::view)
+        .theme(App::theme)
+        .run_with(App::new)
 }
