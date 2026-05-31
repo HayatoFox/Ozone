@@ -124,6 +124,14 @@ pub struct CreateGuild {
     pub name: String,
 }
 
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateGuild {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub icon_id: Option<String>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Channel {
     pub id: Snowflake,

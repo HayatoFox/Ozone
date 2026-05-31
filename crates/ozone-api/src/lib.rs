@@ -114,6 +114,12 @@ pub fn build_app(state: AppState) -> Router {
             post(routes_chat::create_guild).get(routes_chat::list_guilds),
         )
         .route(
+            "/guilds/:guild_id",
+            get(routes_chat::get_guild)
+                .patch(routes_chat::update_guild)
+                .delete(routes_chat::delete_guild),
+        )
+        .route(
             "/guilds/:guild_id/channels",
             post(routes_chat::create_channel)
                 .get(routes_chat::list_channels)

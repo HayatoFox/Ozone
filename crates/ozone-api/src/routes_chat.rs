@@ -10,7 +10,7 @@ use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
 use ozone_proto::dto::{
-    Channel, ChannelPosition, CreateChannel, CreateGuild, Guild, UpdateChannel,
+    Channel, ChannelPosition, CreateChannel, CreateGuild, Guild, UpdateChannel, UpdateGuild,
 };
 use ozone_proto::{perms, Snowflake};
 use sqlx::sqlite::SqliteRow;
@@ -81,12 +81,164 @@ pub async fn create_guild(
     .bind(now)
     .execute(&st.pool)
     .await?;
-    Ok(Json(Guild {
+    let guild = Guild {
         id,
         name: name.to_string(),
         owner_id: user.id,
         icon_id: None,
+    };
+    // Notifie le créateur (ses sessions) de la nouvelle guilde.
+    st.publish(
+        EventScope::User(user.id.as_i64()),
+        "GUILD_CREATE",
+        serde_json::to_value(&guild).unwrap_or_default(),
+    );
+    Ok(Json(guild))
+}
+
+/// `GET /guilds/:guild_id` — détail d'une guilde (membres uniquement).
+pub async fn get_guild(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(guild_id): Path<String>,
+) -> AppResult<Json<Guild>> {
+    let gid = parse_i64(&guild_id)?;
+    pg::require_guild_member(&st.pool, gid, user.id.as_i64()).await?;
+    let g = sqlx::query("SELECT id, name, owner_id, icon_id FROM guilds WHERE id = ?")
+        .bind(gid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    Ok(Json(Guild {
+        id: Snowflake::from_i64(g.get::<i64, _>("id")),
+        name: g.get("name"),
+        owner_id: Snowflake::from_i64(g.get::<i64, _>("owner_id")),
+        icon_id: g.get("icon_id"),
     }))
+}
+
+/// `PATCH /guilds/:guild_id` — renommer / changer l'icône (`MANAGE_GUILD`).
+pub async fn update_guild(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(guild_id): Path<String>,
+    Json(req): Json<UpdateGuild>,
+) -> AppResult<Json<Guild>> {
+    let gid = parse_i64(&guild_id)?;
+    pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_GUILD).await?;
+    let g = sqlx::query("SELECT id, name, owner_id, icon_id FROM guilds WHERE id = ?")
+        .bind(gid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+
+    let name = match req.name {
+        Some(n) => {
+            let t = n.trim().to_string();
+            if t.is_empty() || t.chars().count() > 100 {
+                return Err(AppError::bad_request(
+                    "nom de guilde invalide (1 à 100 caractères)",
+                ));
+            }
+            t
+        }
+        None => g.get("name"),
+    };
+    let icon_id = match req.icon_id {
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => Some(s),
+        None => g.get("icon_id"),
+    };
+    sqlx::query("UPDATE guilds SET name = ?, icon_id = ? WHERE id = ?")
+        .bind(&name)
+        .bind(icon_id.as_deref())
+        .bind(gid)
+        .execute(&st.pool)
+        .await?;
+    let guild = Guild {
+        id: Snowflake::from_i64(gid),
+        name,
+        owner_id: Snowflake::from_i64(g.get::<i64, _>("owner_id")),
+        icon_id,
+    };
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_UPDATE",
+        serde_json::to_value(&guild).unwrap_or_default(),
+    );
+    Ok(Json(guild))
+}
+
+/// `DELETE /guilds/:guild_id` — supprime la guilde et toutes ses données (propriétaire uniquement).
+pub async fn delete_guild(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(guild_id): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let gid = parse_i64(&guild_id)?;
+    let owner = pg::guild_owner(&st.pool, gid)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    if owner != user.id.as_i64() {
+        return Err(AppError::forbidden(
+            "seul le propriétaire peut supprimer la guilde",
+        ));
+    }
+    // Membres avant suppression (pour notifier ensuite via portée individuelle).
+    let members: Vec<i64> = sqlx::query("SELECT user_id FROM guild_members WHERE guild_id = ?")
+        .bind(gid)
+        .fetch_all(&st.pool)
+        .await?
+        .into_iter()
+        .map(|r| r.get::<i64, _>("user_id"))
+        .collect();
+
+    // Cascade atomique. `IN (SELECT id FROM channels WHERE guild_id = ?)` cible les salons de la guilde.
+    let ch = "(SELECT id FROM channels WHERE guild_id = ?)";
+    let mut tx = st.pool.begin().await?;
+    // Messages & dérivés (les déclencheurs FTS se synchronisent à la suppression des messages).
+    for sql in [
+        format!("DELETE FROM reactions WHERE message_id IN (SELECT id FROM messages WHERE channel_id IN {ch})"),
+        format!("DELETE FROM mentions WHERE channel_id IN {ch}"),
+        format!("DELETE FROM read_states WHERE channel_id IN {ch}"),
+        format!("DELETE FROM messages WHERE channel_id IN {ch}"),
+        format!("DELETE FROM channel_overwrites WHERE channel_id IN {ch}"),
+        format!("DELETE FROM notification_settings WHERE (scope_type = 1 AND scope_id IN {ch}) OR (scope_type = 0 AND scope_id = ?)"),
+        "DELETE FROM webhooks WHERE guild_id = ?".to_string(),
+        "DELETE FROM event_interested WHERE event_id IN (SELECT id FROM scheduled_events WHERE guild_id = ?)".to_string(),
+        "DELETE FROM scheduled_events WHERE guild_id = ?".to_string(),
+        "DELETE FROM channels WHERE guild_id = ?".to_string(),
+        "DELETE FROM emojis WHERE guild_id = ?".to_string(),
+        "DELETE FROM stickers WHERE guild_id = ?".to_string(),
+        "DELETE FROM soundboard_sounds WHERE guild_id = ?".to_string(),
+        "DELETE FROM member_roles WHERE guild_id = ?".to_string(),
+        "DELETE FROM roles WHERE guild_id = ?".to_string(),
+        "DELETE FROM invites WHERE guild_id = ?".to_string(),
+        "DELETE FROM guild_bans WHERE guild_id = ?".to_string(),
+        "DELETE FROM audit_log WHERE guild_id = ?".to_string(),
+        "DELETE FROM guild_members WHERE guild_id = ?".to_string(),
+        "DELETE FROM guilds WHERE id = ?".to_string(),
+    ] {
+        // Chaque requête de cette cascade ne référence `gid` qu'une seule fois, sauf la ligne
+        // `notification_settings` qui le lie deux fois (salons puis guilde).
+        let binds = sql.matches('?').count();
+        let mut q = sqlx::query(&sql);
+        for _ in 0..binds {
+            q = q.bind(gid);
+        }
+        q.execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+
+    // Notifie chaque ancien membre (la guilde n'existe plus → portée individuelle).
+    for uid in members {
+        st.publish(
+            EventScope::User(uid),
+            "GUILD_DELETE",
+            serde_json::json!({ "id": gid.to_string() }),
+        );
+    }
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// `GET /guilds` — guildes dont l'utilisateur est membre.
