@@ -6,9 +6,11 @@
 
 pub mod client;
 pub mod gateway;
+pub mod store;
 pub use client::ApiClient;
 pub use gateway::{connect as gateway_connect, GatewayConnection};
 pub use ozone_proto as proto;
+pub use store::Store;
 
 use ozone_proto::Snowflake;
 
