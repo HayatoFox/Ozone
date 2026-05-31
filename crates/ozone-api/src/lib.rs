@@ -24,6 +24,7 @@ pub mod routes_relationships;
 pub mod routes_roles;
 pub mod routes_soundboard;
 pub mod routes_stickers;
+pub mod routes_users;
 pub mod routes_webhooks;
 pub mod state;
 pub mod util;
@@ -71,7 +72,15 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/register", post(routes_auth::register))
         .route("/auth/login", post(routes_auth::login))
         .route("/auth/token/refresh", post(routes_auth::refresh))
-        .route("/users/@me", get(routes_auth::me))
+        .route(
+            "/users/@me",
+            get(routes_auth::me).patch(routes_users::update_profile),
+        )
+        .route(
+            "/users/@me/settings",
+            get(routes_users::get_settings).put(routes_users::put_settings),
+        )
+        .route("/users/:user_id/profile", get(routes_users::get_profile))
         // Relations (amis / blocages / notes)
         .route(
             "/users/@me/relationships",

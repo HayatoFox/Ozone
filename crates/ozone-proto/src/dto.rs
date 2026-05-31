@@ -700,6 +700,45 @@ pub struct NotificationSetting {
     pub muted_until: Option<i64>,
 }
 
+// ──────────────────────────── Profil & réglages ────────────────────────────
+
+/// Profil public d'un utilisateur (sans e-mail).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserProfile {
+    pub id: Snowflake,
+    pub username: String,
+    pub display_name: Option<String>,
+    pub avatar_id: Option<String>,
+    pub bio: Option<String>,
+    pub pronouns: Option<String>,
+    pub banner_id: Option<String>,
+    pub accent_color: Option<u32>,
+    pub created_at: u64,
+}
+
+/// Mise à jour de son propre profil. Champ absent = inchangé ; chaîne vide = effacé.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateProfile {
+    #[serde(default)]
+    pub display_name: Option<String>,
+    #[serde(default)]
+    pub avatar_id: Option<String>,
+    #[serde(default)]
+    pub bio: Option<String>,
+    #[serde(default)]
+    pub pronouns: Option<String>,
+    #[serde(default)]
+    pub banner_id: Option<String>,
+    #[serde(default)]
+    pub accent_color: Option<u32>,
+}
+
+/// Réglages client (blob JSON libre géré par le client).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct UserSettings {
+    pub data: serde_json::Value,
+}
+
 /// Mise à jour d'un réglage de notification.
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct SetNotificationSetting {

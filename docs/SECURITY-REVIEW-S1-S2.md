@@ -57,7 +57,8 @@ cargo test -p ozone-api --test security_s3   # intrusion S3
 cargo test -p ozone-api --test security_s7   # intrusion S7 (webhooks, recherche, événements)
 cargo test -p ozone-api --test security_s8   # intrusion S8 (lecture, mentions, notifications)
 cargo test -p ozone-api --test realtime      # S9 — émission/portée des événements Gateway
-cargo test -p ozone-api                       # suite complète (77 tests)
+cargo test -p ozone-api --test security_s10  # intrusion S10 (profils & réglages)
+cargo test -p ozone-api                       # suite complète (83 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -228,5 +229,23 @@ Défenses :
 - **Payloads minimaux** pour les événements de gestion (identifiants seulement) — pas de fuite de contenu via un événement à portée large.
 - `publish` est *fire-and-forget* (l'absence d'abonné n'est pas une erreur) : aucune mutation ne peut échouer à cause de la Gateway.
 
+## 15. S10 — Profils & réglages
+
+Édition de son profil (nom affiché, avatar, bio, pronoms, bannière, couleur d'accent), profil public, blob de réglages client privé. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`security_s10.rs`) | Résultat |
+|---|---|---|
+| Édition de profil / lecture des réglages sans jeton | `profile_edit_requires_auth` | `401` |
+| **Fuite d'e-mail** via le profil public | `public_profile_never_leaks_email` | absent (champ inexistant + chaîne introuvable) |
+| Profil d'un utilisateur inexistant | idem | `404` |
+| **Isolation des réglages** entre utilisateurs | `settings_are_isolated_per_user` | chacun ne voit que les siens |
+
+Défenses (`routes_users.rs`) :
+- **Édition limitée à soi** : `PATCH /users/@me` n'écrit que `WHERE id = <session>` ; aucune route ne permet d'éditer le profil d'autrui.
+- **E-mail jamais exposé** : le DTO `UserProfile` ne contient pas de champ e-mail (seul `GET /users/@me` — son propre compte — renvoie l'e-mail).
+- **Réglages strictement par utilisateur** (lecture et écriture clés sur la session), **objet JSON obligatoire**, **taille plafonnée** (64 Ko).
+- **Validations** : bio ≤ 190, pronoms ≤ 40, nom affiché ≤ 32, avatar/bannière ≤ 256, couleur ≤ `0xFFFFFF` ; longueurs comptées en caractères Unicode ; tout est paramétré (aucune injection).
+- Choix de conception noté : le profil est **public au sein de l'instance** (tout compte authentifié peut le consulter) — cohérent avec le modèle de confiance mono-instance ; restriction « guilde commune / ami » possible ultérieurement.
+
 ---
-*Document vivant — revue effectuée pour S1 → S9 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), présence/statut + RESUME Gateway, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), émission d'événements pour relations/MP, et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S10 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), présence/statut + RESUME Gateway, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), émission d'événements pour relations/MP, et un audit du futur chiffrement vocal DAVE/MLS.*
