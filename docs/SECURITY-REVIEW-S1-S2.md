@@ -591,5 +591,9 @@ Un abonnement Iced ouvre la Gateway de l'instance courante et pousse ses événe
 | Reconnexion | (réutilise §31/§33) | Le flux reconnecte via **RESUME** (rejeu sans perte) puis repli en connexion complète ; isolation de session garantie côté serveur (§33). |
 | Trame malformée / exécution | (conception) | `serde_json::from_value` en échec ⇒ ignoré (pas de panique) ; rendu **texte brut** (pas d'exécution, cf. §34). |
 
+## 38. S36 — Thèmes & palettes (UI)
+
+État **purement local** : `ThemeChoice` (palettes de marque « Ozone » + thèmes intégrés) + bascule. **Aucune surface de sécurité** — pas de réseau, d'I/O, de secret ni de désérialisation ; seules des couleurs/constantes. **Aucune faille exploitable.** Tests : cycle des thèmes (réducteur + module), libellés non vides, `to_theme()` sans panique.
+
 ---
-*Document vivant — revue effectuée pour S1 → S35 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), thèmes/effets UI, présence/MP dans l'UI, plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S36 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), présence/MP dans l'UI, plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

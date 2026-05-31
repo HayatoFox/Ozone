@@ -17,6 +17,8 @@ use ozone_core::proto::gateway::GatewayFrame;
 use ozone_core::proto::Snowflake;
 use ozone_core::{ApiClient, InstanceRef};
 
+use crate::theme::ThemeChoice;
+
 /// Extrait un identifiant (string → i64) d'un champ d'une trame Gateway.
 fn frame_id(d: &serde_json::Value, key: &str) -> Option<i64> {
     d.get(key)?.as_str()?.parse::<i64>().ok()
@@ -52,6 +54,8 @@ pub enum Message {
     MessageSent(usize, Result<Box<ChatMessage>, String>),
     /// Événement temps réel reçu de la Gateway de l'instance courante.
     GatewayEvent(Box<GatewayFrame>),
+    /// Bascule vers le thème suivant.
+    CycleTheme,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -93,6 +97,7 @@ pub struct App {
     selected_guild: Option<i64>,
     selected_channel: Option<i64>,
     composer: String,
+    theme_choice: ThemeChoice,
 }
 
 /// Le formulaire d'authentification est-il complet (gate inclus si requis) ?
@@ -118,13 +123,14 @@ impl App {
                 selected_guild: None,
                 selected_channel: None,
                 composer: String::new(),
+                theme_choice: ThemeChoice::default(),
             },
             Task::none(),
         )
     }
 
     pub fn theme(&self) -> Theme {
-        Theme::Dark
+        self.theme_choice.to_theme()
     }
 
     /// Insère ou met à jour une instance par adresse normalisée ; renvoie son index.
@@ -403,6 +409,10 @@ impl App {
                 self.apply_gateway(&frame);
                 Task::none()
             }
+            Message::CycleTheme => {
+                self.theme_choice = self.theme_choice.next();
+                Task::none()
+            }
         }
     }
 
@@ -479,6 +489,11 @@ impl App {
             button(text("+ Ajouter"))
                 .width(Length::Fill)
                 .on_press(Message::ShowAddInstance),
+        );
+        rail = rail.push(
+            button(text(format!("🎨 {}", self.theme_choice.label())))
+                .width(Length::Fill)
+                .on_press(Message::CycleTheme),
         );
         container(rail)
             .width(Length::Fixed(170.0))
@@ -754,6 +769,19 @@ mod tests {
             3,
         ))));
         assert!(app.messages.is_empty());
+    }
+
+    #[test]
+    fn cycle_theme_changes_choice() {
+        let (mut app, _) = App::new();
+        let start = app.theme_choice;
+        let _ = app.update(Message::CycleTheme);
+        assert_ne!(app.theme_choice, start);
+        // 4 bascules ⇒ retour au thème initial.
+        for _ in 0..3 {
+            let _ = app.update(Message::CycleTheme);
+        }
+        assert_eq!(app.theme_choice, start);
     }
 
     #[test]

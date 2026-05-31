@@ -5,6 +5,7 @@
 //! Cf. `docs/11-client.md`. Le temps réel (Gateway) et le vocal viendront ensuite.
 
 mod app;
+mod theme;
 
 use app::App;
 
