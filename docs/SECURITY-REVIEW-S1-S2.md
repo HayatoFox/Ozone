@@ -63,7 +63,8 @@ cargo test -p ozone-api --test realtime_social # S12 — portée des événement
 cargo test -p ozone-api --test security_s13  # intrusion S13 (gestion de guilde)
 cargo test -p ozone-api --test invites       # S14 — aperçu & révocation d'invitations
 cargo test -p ozone-api --test leave_guild   # S15 — quitter une guilde
-cargo test -p ozone-api                       # suite complète (95 tests)
+cargo test -p ozone-api --test security_s16  # intrusion S16 (signalisation vocale)
+cargo test -p ozone-api                       # suite complète (99 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -319,5 +320,23 @@ Défenses (`routes_guild.rs`) : l'aperçu est en **lecture seule** (n'insère au
 
 `DELETE /guilds/:id/members/@me`. Écrit et audité par le mainteneur. **Aucune faille exploitable.** Test `leave_guild::member_can_leave_owner_cannot` : un membre quitte (`200`, n'est plus membre ensuite), le **propriétaire ne peut pas** quitter (`403` — il doit supprimer la guilde), un non-membre obtient `404`. Émet `GUILD_MEMBER_REMOVE` (portée guilde). N'agit que sur **sa propre** adhésion (route `@me`, jamais celle d'un tiers — le retrait d'autrui passe par `kick_member`, gardé par `KICK_MEMBERS` + hiérarchie). Note routage : `/members/@me` (statique) et `/members/:user_id` (paramètre) coexistent sans conflit (priorité au segment statique).
 
+## 21. S16 — Signalisation vocale
+
+États vocaux + rejoindre/déplacer/quitter, mute/deaf (soi + modération), `VOICE_STATE_UPDATE`/`VOICE_SERVER_UPDATE`, régions. **Le transport média (SFU/SRTP/ICE) et l'E2EE (DAVE/MLS) restent un sous-projet média séparé** (non implémenté ici). Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`security_s16.rs`) | Résultat |
+|---|---|---|
+| Rejoindre/lister en **non-membre** | `join_requires_membership_and_connect` | `403` |
+| Rejoindre sans `CONNECT` (refusé sur le salon) | idem | `403` |
+| Mute serveur sans `MUTE_MEMBERS` | `moderation_requires_perms_and_protects_owner` | `403` (puis `200` une fois la permission accordée) |
+| Modérer le **propriétaire** en vocal | idem | `403` |
+
+Défenses (`routes_voice.rs`) :
+- **Jonction gardée** : `require_guild_member` + salon de type vocal/stage **de la guilde** + `require_channel_perm(VIEW_CHANNEL | CONNECT)` (respecte les overrides de salon, ex. salon vocal privé).
+- **Le jeton média ne fuite pas** : `VOICE_SERVER_UPDATE` (qui porte le **jeton** signé + l'endpoint) est diffusé **uniquement à l'intéressé** (`EventScope::User`) ; les autres ne reçoivent que `VOICE_STATE_UPDATE` (portée guilde, sans jeton).
+- **Actions sur soi** : mise à jour d'indicateurs / départ ne touchent que sa propre ligne (`user_id = session`).
+- **Modération étagée** : `MUTE_MEMBERS` / `DEAFEN_MEMBERS` / `MOVE_MEMBERS` selon l'action ; cible obligatoirement connectée au vocal de la guilde ; **propriétaire protégé** ; déplacement borné aux salons vocaux de la même guilde (anti-IDOR inter-guildes).
+- **Nettoyage** : la fermeture de la session Gateway libère l'état vocal (pas d'état fantôme). Jeton vocal = JWT signé `kind="voice"`, TTL 1 h, à vérifier par le futur SFU. Requêtes paramétrées.
+
 ---
-*Document vivant — revue effectuée pour S1 → S15 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S16 ; à reconduire à chaque couche. À compléter par : **le sous-projet média vocal** (SFU/SRTP/ICE + E2EE DAVE/MLS) et son audit dédié, rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

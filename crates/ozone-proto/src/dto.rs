@@ -788,3 +788,78 @@ pub struct SetNotificationSetting {
     #[serde(default)]
     pub mute_seconds: Option<i64>,
 }
+
+// ──────────────────────────── Vocal (signalisation) ────────────────────────────
+
+/// État vocal d'un utilisateur dans un salon vocal.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VoiceState {
+    pub user_id: Snowflake,
+    pub guild_id: Snowflake,
+    pub channel_id: Option<Snowflake>,
+    pub session_id: String,
+    pub self_mute: bool,
+    pub self_deaf: bool,
+    pub self_video: bool,
+    pub self_stream: bool,
+    pub mute: bool,
+    pub deaf: bool,
+    pub suppress: bool,
+}
+
+/// Mise à jour de son propre état vocal. `channel_id` présent ⇒ rejoindre / se déplacer.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateVoiceState {
+    /// Salon vocal cible (rejoindre/déplacer). Absent = simple mise à jour des indicateurs.
+    #[serde(default)]
+    pub channel_id: Option<Snowflake>,
+    #[serde(default)]
+    pub self_mute: Option<bool>,
+    #[serde(default)]
+    pub self_deaf: Option<bool>,
+    #[serde(default)]
+    pub self_video: Option<bool>,
+    #[serde(default)]
+    pub self_stream: Option<bool>,
+}
+
+/// Action de modération vocale sur un membre.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ModerateVoiceState {
+    #[serde(default)]
+    pub mute: Option<bool>,
+    #[serde(default)]
+    pub deaf: Option<bool>,
+    /// Déplacer le membre vers ce salon vocal.
+    #[serde(default)]
+    pub channel_id: Option<Snowflake>,
+    /// Déconnecter le membre du vocal.
+    #[serde(default)]
+    pub disconnect: Option<bool>,
+}
+
+/// Informations de connexion au nœud média (équivalent `VOICE_SERVER_UPDATE`).
+/// Le transport média (SFU) est un sous-projet séparé : `endpoint` est un emplacement à configurer.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VoiceConnectionInfo {
+    pub token: String,
+    pub endpoint: String,
+    pub guild_id: Snowflake,
+    pub channel_id: Snowflake,
+    pub session_id: String,
+}
+
+/// Réponse à la connexion vocale : état + informations du nœud média.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VoiceJoinResponse {
+    pub voice_state: VoiceState,
+    pub connection: VoiceConnectionInfo,
+}
+
+/// Région vocale disponible (sélection de nœud SFU).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct VoiceRegion {
+    pub id: String,
+    pub name: String,
+    pub optimal: bool,
+}

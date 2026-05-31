@@ -27,6 +27,7 @@ pub mod routes_roles;
 pub mod routes_soundboard;
 pub mod routes_stickers;
 pub mod routes_users;
+pub mod routes_voice;
 pub mod routes_webhooks;
 pub mod state;
 pub mod util;
@@ -186,6 +187,20 @@ pub fn build_app(state: AppState) -> Router {
             "/guilds/:guild_id/presences",
             get(routes_presence::list_presences),
         )
+        // Signalisation vocale
+        .route(
+            "/guilds/:guild_id/voice-states",
+            get(routes_voice::list_voice_states),
+        )
+        .route(
+            "/guilds/:guild_id/voice-states/@me",
+            patch(routes_voice::update_own_voice_state).delete(routes_voice::leave_voice),
+        )
+        .route(
+            "/guilds/:guild_id/voice-states/:user_id",
+            patch(routes_voice::moderate_voice_state),
+        )
+        .route("/voice/regions", get(routes_voice::voice_regions))
         .route(
             "/guilds/:guild_id/members/:user_id",
             patch(routes_moderation::update_member).delete(routes_guild::kick_member),

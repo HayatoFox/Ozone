@@ -88,10 +88,12 @@ async fn handle_socket(socket: WebSocket, st: AppState) {
         }
     }
 
-    // Déconnexion : si c'était la dernière session de l'utilisateur, il passe hors ligne.
+    // Déconnexion : si c'était la dernière session de l'utilisateur, il passe hors ligne
+    // et son état vocal éventuel est libéré.
     if let Some(uid) = authed {
         if st.presence.disconnect(uid.as_i64()) {
             broadcast_presence(&st, uid.as_i64()).await;
+            crate::routes_voice::disconnect_all_voice(&st, uid.as_i64()).await;
         }
     }
 }
