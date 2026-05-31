@@ -179,6 +179,10 @@ pub fn build_app(state: AppState) -> Router {
         // Membres & invitations
         .route("/guilds/:guild_id/members", get(routes_guild::list_members))
         .route(
+            "/guilds/:guild_id/members/@me",
+            delete(routes_guild::leave_guild),
+        )
+        .route(
             "/guilds/:guild_id/presences",
             get(routes_presence::list_presences),
         )

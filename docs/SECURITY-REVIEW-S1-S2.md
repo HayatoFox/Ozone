@@ -62,7 +62,8 @@ cargo test -p ozone-api --test security_s11  # intrusion S11 (présence)
 cargo test -p ozone-api --test realtime_social # S12 — portée des événements relations/MP
 cargo test -p ozone-api --test security_s13  # intrusion S13 (gestion de guilde)
 cargo test -p ozone-api --test invites       # S14 — aperçu & révocation d'invitations
-cargo test -p ozone-api                       # suite complète (94 tests)
+cargo test -p ozone-api --test leave_guild   # S15 — quitter une guilde
+cargo test -p ozone-api                       # suite complète (95 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -314,5 +315,9 @@ Défenses (`routes_chat.rs`) :
 
 Défenses (`routes_guild.rs`) : l'aperçu est en **lecture seule** (n'insère aucun membre) et n'expose que des informations d'invitation (nom de guilde, nombre de membres, créateur) — précisément ce qu'une invitation est censée révéler ; la révocation exige d'être **le créateur de l'invitation** ou de détenir `MANAGE_GUILD` ; expiration vérifiée à l'aperçu. Requêtes paramétrées.
 
+## 20. S15 — Quitter une guilde
+
+`DELETE /guilds/:id/members/@me`. Écrit et audité par le mainteneur. **Aucune faille exploitable.** Test `leave_guild::member_can_leave_owner_cannot` : un membre quitte (`200`, n'est plus membre ensuite), le **propriétaire ne peut pas** quitter (`403` — il doit supprimer la guilde), un non-membre obtient `404`. Émet `GUILD_MEMBER_REMOVE` (portée guilde). N'agit que sur **sa propre** adhésion (route `@me`, jamais celle d'un tiers — le retrait d'autrui passe par `kick_member`, gardé par `KICK_MEMBERS` + hiérarchie). Note routage : `/members/@me` (statique) et `/members/:user_id` (paramètre) coexistent sans conflit (priorité au segment statique).
+
 ---
-*Document vivant — revue effectuée pour S1 → S14 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S15 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*

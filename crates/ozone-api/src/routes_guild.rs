@@ -103,6 +103,45 @@ pub async fn kick_member(
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
+/// `DELETE /guilds/:guild_id/members/@me` — quitter une guilde soi-même.
+pub async fn leave_guild(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(gid): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let gid = parse_i64(&gid)?;
+    let me = user.id.as_i64();
+    let owner = pg::guild_owner(&st.pool, gid)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    if owner == me {
+        return Err(AppError::forbidden(
+            "le propriétaire ne peut pas quitter sa guilde (supprimez-la d'abord)",
+        ));
+    }
+    let res = sqlx::query("DELETE FROM guild_members WHERE guild_id = ? AND user_id = ?")
+        .bind(gid)
+        .bind(me)
+        .execute(&st.pool)
+        .await?;
+    if res.rows_affected() == 0 {
+        return Err(AppError::not_found(
+            "vous n'êtes pas membre de cette guilde",
+        ));
+    }
+    sqlx::query("DELETE FROM member_roles WHERE guild_id = ? AND user_id = ?")
+        .bind(gid)
+        .bind(me)
+        .execute(&st.pool)
+        .await?;
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_MEMBER_REMOVE",
+        serde_json::json!({ "guild_id": gid.to_string(), "user_id": me.to_string() }),
+    );
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
 // ───────────────────────────── Invitations ─────────────────────────────
 
 fn gen_code() -> String {
