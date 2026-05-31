@@ -1,0 +1,23 @@
+# Image du nœud média SFU Ozone (WebRTC). Processus SÉPARÉ de l'API.
+# Build :   docker build -f deploy/Dockerfile.sfu -t ozone/ozone-sfu:dev .
+#
+# Note : cette image embarque la pile WebRTC (ring/rustls) — confinée au binaire média.
+# L'image de l'API (Dockerfile racine) reste sans ring.
+
+FROM rust:1-bookworm AS builder
+WORKDIR /app
+COPY . .
+# gcc/cc présents dans l'image rust (nécessaires à ring/webrtc).
+RUN cargo build --release -p ozone-sfu
+
+FROM debian:bookworm-slim
+RUN useradd -m -u 10002 ozonesfu
+COPY --from=builder /app/target/release/ozone-sfu /usr/local/bin/ozone-sfu
+USER ozonesfu
+ENV OZONE_SFU_BIND=0.0.0.0:8081 \
+    RUST_LOG=info
+# Signalisation HTTP. Le média RTP/SRTP utilise UDP (ports éphémères) : préférez le réseau
+# hôte (`--network host`) pour le nœud média, ou configurez un mux de port UDP fixe.
+EXPOSE 8081
+# OZONE_VOICE_SECRET doit être fourni au démarrage (même valeur que l'API), sinon fail-closed.
+CMD ["ozone-sfu"]

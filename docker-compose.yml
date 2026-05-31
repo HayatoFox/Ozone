@@ -18,9 +18,30 @@ services:
       OZONE_INSTANCE_NAME: "${OZONE_INSTANCE_NAME:-Mon Instance Ozone}"
       OZONE_REGISTRATION: "${OZONE_REGISTRATION:-open}"
       # OZONE_INSTANCE_PASSWORD: "change-moi"   # décommenter pour protéger l'accès à l'instance
+      # Secret PARTAGÉ avec le nœud média (signature des jetons vocaux). À défaut, l'API utilise
+      # son secret JWT interne (le SFU ne pourra alors pas vérifier les jetons → vocal indisponible).
+      OZONE_VOICE_SECRET: "${OZONE_VOICE_SECRET:-}"
       RUST_LOG: "info"
     volumes:
       - ozone-data:/data
+    restart: unless-stopped
+
+  # ─────────── Nœud média SFU (vocal/vidéo WebRTC) — processus séparé ───────────
+  # Active le vocal. Requiert OZONE_VOICE_SECRET (MÊME valeur que l'API), sinon fail-closed.
+  # Le média RTP/SRTP circule en UDP (ports éphémères) : le réseau hôte est recommandé pour le
+  # nœud média (décommenter `network_mode: host`), ou configurez un mux de port UDP fixe.
+  ozone-sfu:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.sfu
+    image: ozone/ozone-sfu:dev
+    ports:
+      - "8081:8081"        # signalisation HTTP (le média UDP nécessite le réseau hôte)
+    # network_mode: host   # recommandé pour le média WebRTC (UDP)
+    environment:
+      OZONE_SFU_BIND: "0.0.0.0:8081"
+      OZONE_VOICE_SECRET: "${OZONE_VOICE_SECRET:-}"
+      RUST_LOG: "info"
     restart: unless-stopped
 
   # ─────────── Profil « full » : infrastructure pour la montée en charge (non utilisée par le tout-en-un) ───────────

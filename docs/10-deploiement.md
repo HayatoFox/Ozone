@@ -92,6 +92,7 @@ Pratique pour distribuer un seul fichier, ou pour des images `FROM scratch`/`dis
 | `OZONE_INSTANCE_DESCRIPTION` | — | description |
 | `OZONE_REGISTRATION` | `open` | `open` / `invite` / `closed` |
 | `OZONE_INSTANCE_PASSWORD` | — | mot de passe d'instance (gate). Vide = pas de gate |
+| `OZONE_VOICE_SECRET` | (secret JWT) | secret **partagé** API ↔ nœud média (jetons vocaux) |
 | `RUST_LOG` | `info` | niveau de logs |
 
 Cf. [.env.example](../.env.example).
@@ -100,5 +101,22 @@ Cf. [.env.example](../.env.example).
 - **MAJ** : `git pull && cargo build --release -p ozone-api && sudo systemctl restart ozone-api` (ou re-build de l'image).
 - **Sauvegarde** : copier `OZONE_DB_PATH` (SQLite). En mode WAL, sauvegarder `*.db`, `*.db-wal`, `*.db-shm` ensemble, ou via `sqlite3 ozone.db ".backup ..."`.
 
-## G. Montée en charge (full-stack)
+## G. Nœud média SFU (vocal/vidéo)
+
+Le vocal s'appuie sur un **processus séparé** `ozone-sfu` (WebRTC). Il est facultatif : sans lui,
+toute la messagerie fonctionne ; seul le vocal est indisponible.
+
+- **Secret partagé obligatoire** : définir la **même** valeur de `OZONE_VOICE_SECRET` sur l'API
+  **et** le SFU (`openssl rand -hex 32`). Sans secret, le SFU refuse toute connexion (*fail-closed*).
+- **Lancer** : binaire `target/release/ozone-sfu` (unité [deploy/ozone-sfu.service](../deploy/ozone-sfu.service)),
+  image [deploy/Dockerfile.sfu](../deploy/Dockerfile.sfu), ou service `ozone-sfu` du `docker-compose`.
+- **Réseau** : signalisation HTTP sur `OZONE_SFU_BIND` (déf. `:8081`) ; le **média RTP/SRTP** est en
+  **UDP** (ports éphémères) → préférez le **réseau hôte** pour le nœud média (ou un mux de port UDP
+  fixe à venir). Ouvrir l'UDP correspondant au pare-feu.
+- **Isolation** : le SFU embarque `ring`/`rustls` (via WebRTC) ; l'API en reste exempte.
+
+> État : signalisation + relais RTP + authz du jeton vocal en place. Renégociation N-à-N (WS) et
+> E2EE DAVE/MLS à venir — cf. [crates/ozone-sfu/README.md](../crates/ozone-sfu/README.md).
+
+## H. Montée en charge (full-stack)
 À grande échelle, on bascule du tout-en-un SQLite vers l'architecture de [01-architecture](01-architecture.md) (PostgreSQL + ScyllaDB + Redis + NATS + MinIO + SFU), chaque service scalant indépendamment. Le profil `full` du `docker-compose` fournit déjà ces briques pour le développement.
