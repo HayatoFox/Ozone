@@ -678,3 +678,35 @@ pub struct SearchResponse {
     pub total: i64,
     pub messages: Vec<Message>,
 }
+
+// ──────────────────────── Marqueurs de lecture & notifications ────────────────────────
+
+/// État de lecture d'un salon pour l'utilisateur courant.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ReadState {
+    pub channel_id: Snowflake,
+    pub last_read_id: Snowflake,
+    pub mention_count: i64,
+}
+
+/// Réglage de notification d'une portée (`scope_type` : 0 = guilde, 1 = salon).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct NotificationSetting {
+    pub scope_type: u8,
+    pub scope_id: Snowflake,
+    /// 0 = tous, 1 = @mentions, 2 = rien, 3 = hériter (salon).
+    pub level: u8,
+    /// Instant (epoch ms) de fin de mute ; `None` = non mute.
+    pub muted_until: Option<i64>,
+}
+
+/// Mise à jour d'un réglage de notification.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SetNotificationSetting {
+    /// 0 = tous, 1 = @mentions, 2 = rien, 3 = hériter (salon). `None` = inchangé.
+    #[serde(default)]
+    pub level: Option<u8>,
+    /// Mute : `0` = réactiver, `> 0` = durée en secondes, `< 0` = jusqu'à réactivation. `None` = inchangé.
+    #[serde(default)]
+    pub mute_seconds: Option<i64>,
+}

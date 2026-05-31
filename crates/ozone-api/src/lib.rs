@@ -19,6 +19,7 @@ pub mod routes_instance;
 pub mod routes_instance_admin;
 pub mod routes_messages;
 pub mod routes_moderation;
+pub mod routes_notifications;
 pub mod routes_relationships;
 pub mod routes_roles;
 pub mod routes_soundboard;
@@ -202,6 +203,32 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/guilds/:guild_id/soundboard/:sound_id",
             patch(routes_soundboard::update_sound).delete(routes_soundboard::delete_sound),
+        )
+        // Marqueurs de lecture & notifications
+        .route(
+            "/channels/:channel_id/messages/:message_id/ack",
+            post(routes_notifications::ack_message),
+        )
+        .route(
+            "/guilds/:guild_id/ack",
+            post(routes_notifications::ack_guild),
+        )
+        .route(
+            "/users/@me/read-states",
+            get(routes_notifications::list_read_states),
+        )
+        .route("/users/@me/mentions", get(routes_messages::mentions_inbox))
+        .route(
+            "/users/@me/notification-settings",
+            get(routes_notifications::list_notification_settings),
+        )
+        .route(
+            "/users/@me/notification-settings/guild/:guild_id",
+            put(routes_notifications::set_guild_notification),
+        )
+        .route(
+            "/users/@me/notification-settings/channel/:channel_id",
+            put(routes_notifications::set_channel_notification),
         )
         // Recherche de messages (FTS5)
         .route(

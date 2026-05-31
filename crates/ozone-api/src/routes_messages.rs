@@ -149,6 +149,102 @@ async fn hydrate(st: &AppState, mut msg: Message, user_id: i64) -> AppResult<Mes
     Ok(msg)
 }
 
+// ───────────────────────────── Mentions ─────────────────────────────
+
+/// Extrait les identifiants mentionnés (`<@123>` ou `<@!123>`), dédupliqués.
+fn parse_mention_ids(content: &str) -> Vec<i64> {
+    let bytes = content.as_bytes();
+    let mut ids = Vec::new();
+    let mut i = 0;
+    while i + 1 < bytes.len() {
+        if bytes[i] == b'<' && bytes[i + 1] == b'@' {
+            let mut j = i + 2;
+            if j < bytes.len() && bytes[j] == b'!' {
+                j += 1;
+            }
+            let start = j;
+            while j < bytes.len() && bytes[j].is_ascii_digit() {
+                j += 1;
+            }
+            if j < bytes.len() && bytes[j] == b'>' && j > start {
+                if let Ok(id) = content[start..j].parse::<i64>() {
+                    if !ids.contains(&id) {
+                        ids.push(id);
+                    }
+                }
+                i = j + 1;
+                continue;
+            }
+        }
+        i += 1;
+    }
+    ids
+}
+
+/// Enregistre les mentions d'un message **pour les seuls destinataires autorisés à voir le salon**
+/// (anti-notification fantôme) et incrémente leur compteur de mentions non lues.
+async fn process_mentions(
+    st: &AppState,
+    channel_id: i64,
+    message_id: i64,
+    author_id: i64,
+    content: &str,
+) -> AppResult<()> {
+    let ids = parse_mention_ids(content);
+    if ids.is_empty() {
+        return Ok(());
+    }
+    let guild = match pg::channel_guild(&st.pool, channel_id).await? {
+        Some(g) => g,
+        None => return Ok(()),
+    };
+    let now = now_ms();
+    for uid in ids {
+        if uid == author_id {
+            continue;
+        }
+        let can_view = match guild {
+            Some(gid) => match pg::guild_owner(&st.pool, gid).await? {
+                Some(owner) => {
+                    let p = pg::channel_permissions(&st.pool, gid, owner, channel_id, uid).await?;
+                    perms::has(p, perms::VIEW_CHANNEL)
+                }
+                None => false,
+            },
+            None => sqlx::query("SELECT 1 FROM dm_recipients WHERE channel_id = ? AND user_id = ?")
+                .bind(channel_id)
+                .bind(uid)
+                .fetch_optional(&st.pool)
+                .await?
+                .is_some(),
+        };
+        if !can_view {
+            continue;
+        }
+        let inserted = sqlx::query(
+            "INSERT OR IGNORE INTO mentions (user_id, message_id, channel_id, created_at) VALUES (?, ?, ?, ?)",
+        )
+        .bind(uid)
+        .bind(message_id)
+        .bind(channel_id)
+        .bind(now)
+        .execute(&st.pool)
+        .await?
+        .rows_affected();
+        if inserted > 0 {
+            sqlx::query(
+                "INSERT INTO read_states (user_id, channel_id, last_read_id, mention_count) VALUES (?, ?, 0, 1) \
+                 ON CONFLICT(user_id, channel_id) DO UPDATE SET mention_count = mention_count + 1",
+            )
+            .bind(uid)
+            .bind(channel_id)
+            .execute(&st.pool)
+            .await?;
+        }
+    }
+    Ok(())
+}
+
 // ───────────────────────────── Liste paginée ─────────────────────────────
 
 #[derive(Debug, Deserialize)]
@@ -340,6 +436,8 @@ pub async fn create_message(
     .execute(&st.pool)
     .await?;
 
+    process_mentions(&st, cid, id.as_i64(), user.id.as_i64(), content).await?;
+
     let msg = hydrate(
         &st,
         fetch_message_in_channel(&st, cid, id.as_i64()).await?,
@@ -384,6 +482,7 @@ pub async fn insert_webhook_message(
     .bind(now)
     .execute(&st.pool)
     .await?;
+    process_mentions(st, channel_id, id.as_i64(), author_id, content).await?;
     let msg = hydrate(
         st,
         fetch_message_in_channel(st, channel_id, id.as_i64()).await?,
@@ -880,4 +979,90 @@ pub async fn search_channel(
     )
     .await?;
     Ok(Json(run_search(&st, &[cid], &q, user.id.as_i64()).await?))
+}
+
+// ───────────────────────────── Boîte de mentions ─────────────────────────────
+
+/// L'utilisateur peut-il **actuellement** lire ce salon ? (salon supprimé → `false`).
+async fn can_view_channel(st: &AppState, cid: i64, uid: i64) -> AppResult<bool> {
+    match pg::channel_guild(&st.pool, cid).await? {
+        None => Ok(false),
+        Some(Some(gid)) => match pg::guild_owner(&st.pool, gid).await? {
+            Some(owner) => {
+                let p = pg::channel_permissions(&st.pool, gid, owner, cid, uid).await?;
+                Ok(perms::has(
+                    p,
+                    perms::VIEW_CHANNEL | perms::READ_MESSAGE_HISTORY,
+                ))
+            }
+            None => Ok(false),
+        },
+        Some(None) => Ok(sqlx::query(
+            "SELECT 1 FROM dm_recipients WHERE channel_id = ? AND user_id = ?",
+        )
+        .bind(cid)
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await?
+        .is_some()),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InboxQuery {
+    limit: Option<i64>,
+}
+
+/// `GET /users/@me/mentions?limit=` — messages récents qui me mentionnent, **filtrés aux salons
+/// que je peux encore lire** (et messages non supprimés).
+pub async fn mentions_inbox(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Query(q): Query<InboxQuery>,
+) -> AppResult<Json<Vec<Message>>> {
+    let uid = user.id.as_i64();
+    let limit = q.limit.unwrap_or(25).clamp(1, 50);
+    // On lit plus large que `limit` pour compenser le filtrage (permissions / suppressions).
+    let rows = sqlx::query(
+        "SELECT message_id, channel_id FROM mentions WHERE user_id = ? ORDER BY message_id DESC LIMIT ?",
+    )
+    .bind(uid)
+    .bind(limit * 4)
+    .fetch_all(&st.pool)
+    .await?;
+
+    let mut viewable: HashMap<i64, bool> = HashMap::new();
+    let mut out: Vec<Message> = Vec::new();
+    for r in rows {
+        if out.len() as i64 >= limit {
+            break;
+        }
+        let cid: i64 = r.get("channel_id");
+        let mid: i64 = r.get("message_id");
+        let can = match viewable.get(&cid) {
+            Some(v) => *v,
+            None => {
+                let v = can_view_channel(&st, cid, uid).await?;
+                viewable.insert(cid, v);
+                v
+            }
+        };
+        if !can {
+            continue;
+        }
+        if let Some(row) = sqlx::query(&format!("{MSG_SELECT} WHERE m.id = ? AND m.channel_id = ?"))
+            .bind(mid)
+            .bind(cid)
+            .fetch_optional(&st.pool)
+            .await?
+        {
+            let mut msg = row_to_message_basic(row);
+            let map = load_reactions(&st, &[mid], uid).await?;
+            if let Some(rs) = map.get(&mid) {
+                msg.reactions = rs.clone();
+            }
+            out.push(msg);
+        }
+    }
+    Ok(Json(out))
 }

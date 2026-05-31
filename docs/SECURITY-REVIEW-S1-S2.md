@@ -55,7 +55,8 @@
 cargo test -p ozone-api --test security      # intrusion S1/S2
 cargo test -p ozone-api --test security_s3   # intrusion S3
 cargo test -p ozone-api --test security_s7   # intrusion S7 (webhooks, recherche, événements)
-cargo test -p ozone-api                       # suite complète (69 tests)
+cargo test -p ozone-api --test security_s8   # intrusion S8 (lecture, mentions, notifications)
+cargo test -p ozone-api                       # suite complète (76 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -191,5 +192,24 @@ Défenses :
 - Oracle d'existence d'événement (`404` vs `403`) pour un non-membre sondant des identifiants (négligeable : Snowflakes 64 bits ; info interne à la guilde).
 - `viewable_channel_ids` calcule les permissions salon par salon (N requêtes) — **performance**, pas sécurité ; à optimiser pour les grosses guildes.
 
+## 13. S8 — Marqueurs de lecture & notifications
+
+État de lecture (`last_read_id` + compteur de mentions), boîte de mentions, réglages de notification (niveau + mute). Écrit et audité par le mainteneur (couplage sensible à la messagerie et aux permissions). **Aucune faille exploitable.** Notifications natives OS / push : hors périmètre serveur (client/workers).
+
+| Vecteur testé | Test (`security_s8.rs`) | Résultat |
+|---|---|---|
+| `ack` sur un salon non visible | `ack_requires_channel_view` | `403` |
+| **Mention fantôme** : mentionner un utilisateur qui ne peut pas voir le salon | `mention_to_unauthorized_user_is_ignored` | aucun compteur, boîte vide |
+| Régler les notifs d'une guilde dont on n'est pas membre / d'un salon non visible | `notification_settings_authorization` | `403` |
+| Boîte de mentions après **perte d'accès** au salon | `inbox_drops_channels_after_access_loss` | mention masquée dynamiquement |
+
+Défenses (`routes_notifications.rs` + `routes_messages.rs`) :
+- **Isolation par utilisateur** : tous les états de lecture / réglages sont clés sur `user_id = @me` (lecture **et** écriture) — aucun accès ni écriture croisés possibles.
+- **Gardes de portée** : `ack`/réglage de salon → `require_channel_perm(VIEW_CHANNEL)` ; `ack` de guilde / réglage de guilde → `require_guild_member` ; `ack` de guilde ne touche que les salons réellement visibles.
+- **Anti-mention fantôme** : `process_mentions` n'enregistre une mention (et n'incrémente le compteur) que si la cible peut **voir** le salon (membre+`VIEW` en guilde, destinataire en MP), exclut l'auto-mention, et déduplique (compteur exact).
+- **Boîte de mentions filtrée dynamiquement** : `mentions_inbox` recalcule `VIEW_CHANNEL | READ_MESSAGE_HISTORY` par salon **au moment de la lecture** et ignore les messages supprimés — une perte d'accès masque immédiatement les mentions passées.
+- **Parseur de mentions** sûr (indices sur octets ASCII uniquement → pas de panique sur frontière de caractère) ; aucune interpolation de chaîne utilisateur en SQL.
+- Note négligeable : `ack` ne vérifie pas que `message_id` appartient bien au salon (effet limité au seul badge non-lu de l'appelant ; pas de fuite ni d'impact tiers).
+
 ---
-*Document vivant — revue effectuée pour S1 → S7 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S8 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), émission d'événements Gateway sur les mutations (read state / notifs en temps réel), et un audit du futur chiffrement vocal DAVE/MLS.*
