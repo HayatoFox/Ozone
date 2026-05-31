@@ -100,10 +100,30 @@ pub async fn channel_permissions(
         return Ok(perms::ALL);
     }
     let role_ids = member_role_ids(pool, guild_id, user_id).await?;
+    // Un **fil** (thread, type 11/12) hérite des surcharges de son salon parent : on calcule donc
+    // les permissions effectives contre le parent. Salon normal → contre lui-même (inchangé).
+    let overwrite_channel = {
+        let row = sqlx::query("SELECT type, parent_id FROM channels WHERE id = ?")
+            .bind(channel_id)
+            .fetch_optional(pool)
+            .await?;
+        match row {
+            Some(r) => {
+                let kind: i64 = r.get("type");
+                let parent: Option<i64> = r.get("parent_id");
+                if kind == 11 || kind == 12 {
+                    parent.unwrap_or(channel_id)
+                } else {
+                    channel_id
+                }
+            }
+            None => channel_id,
+        }
+    };
     let ows = sqlx::query(
         "SELECT target_id, target_type, allow, deny FROM channel_overwrites WHERE channel_id = ?",
     )
-    .bind(channel_id)
+    .bind(overwrite_channel)
     .fetch_all(pool)
     .await?;
 

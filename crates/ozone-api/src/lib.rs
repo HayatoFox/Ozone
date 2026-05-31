@@ -164,6 +164,11 @@ pub fn build_app(state: AppState) -> Router {
             "/channels/:channel_id/typing",
             post(routes_messages::typing),
         )
+        // Fils (threads)
+        .route(
+            "/channels/:channel_id/threads",
+            post(routes_chat::create_thread).get(routes_chat::list_threads),
+        )
         // Pièces jointes
         .route(
             "/channels/:channel_id/attachments",

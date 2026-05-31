@@ -69,8 +69,9 @@ cargo test -p ozone-sfu --test auth          # S18 — authz du plan média (SFU
 cargo test -p ozone-api --test discovery     # S20 — découverte de guildes publiques
 cargo test -p ozone-api --test polls         # S21 — sondages
 cargo test -p ozone-api --test attachments   # S22 — pièces jointes
-cargo test -p ozone-api                       # API : suite complète (106 tests)
-cargo test --workspace                        # API + SFU + proto (113 tests)
+cargo test -p ozone-api --test threads       # S23 — fils + héritage de permissions
+cargo test -p ozone-api                       # API : suite complète (108 tests)
+cargo test --workspace                        # API + SFU + proto (115 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -420,5 +421,20 @@ Défenses (`routes_attachments.rs`) :
 - **Téléchargement non public** : gardé par `VIEW_CHANNEL` du salon de la pièce jointe (auth requise) — pas d'URL anonyme. *(Amélioration future : URLs signées/CDN.)*
 - **F8 (trouvée et corrigée à la revue)** : servir un contenu téléversé avec un `Content-Type` **contrôlé par l'attaquant** en `inline` permettait un **XSS stocké** (HTML/JS téléversé exécuté dans l'origine de l'instance). Corrigé : `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, et `Content-Disposition: attachment` (téléchargement forcé) pour tout type **hors** médias sûrs (`image/`/`audio/`/`video/`/`text/plain`).
 
+## 27. S23 — Fils (threads)
+
+`POST`/`GET /channels/:id/threads`. Un fil est un salon (type 11) sous un salon texte/annonces ; ses messages réutilisent les routes de messagerie existantes. Le point sensible — **l'héritage des permissions** — a nécessité une modification du **cœur des permissions**, vérifiée non-régressive (les 106 tests préexistants passent toujours). Audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`threads.rs`) | Résultat |
+|---|---|---|
+| Fil **public** : un membre peut y poster | `thread_inherits_parent_permissions` | `200` |
+| Fil sous un salon **privé** : non-visible/non-écrivable par un non-autorisé | idem | lecture `403`, écriture `403` |
+| Lister les fils d'un salon non visible | idem | `403` |
+| Fil sous un salon vocal | `create_post_list_thread` | `400` |
+
+Défenses :
+- **Héritage des surcharges** (`permissions::channel_permissions`) : pour un fil (type 11/12), les permissions effectives sont calculées contre **les surcharges du salon parent** — un fil sous un salon privé reste privé partout (REST **et** routage Gateway, qui utilisent la même fonction). Changement **rétro-compatible** : pour un salon normal, le comportement est inchangé (vérifié par toute la suite préexistante).
+- **Création** gardée par `VIEW_CHANNEL | CREATE_PUBLIC_THREADS` sur le **parent**, restreinte aux salons texte/annonces d'une guilde ; nom validé (1–100). Liste filtrée par visibilité effective de chaque fil.
+
 ---
-*Document vivant — revue effectuée pour S1 → S22 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S23 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

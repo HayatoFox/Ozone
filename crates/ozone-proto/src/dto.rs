@@ -182,6 +182,12 @@ pub struct CreateChannel {
     pub rate_limit_per_user: Option<i32>,
 }
 
+/// Démarre un fil (thread) sous un salon texte.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateThread {
+    pub name: String,
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct UpdateChannel {
     pub name: Option<String>,

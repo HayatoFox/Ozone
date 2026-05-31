@@ -10,7 +10,8 @@ use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
 use ozone_proto::dto::{
-    Channel, ChannelPosition, CreateChannel, CreateGuild, Guild, UpdateChannel, UpdateGuild,
+    Channel, ChannelPosition, CreateChannel, CreateGuild, CreateThread, Guild, UpdateChannel,
+    UpdateGuild,
 };
 use ozone_proto::{perms, Snowflake};
 use sqlx::sqlite::SqliteRow;
@@ -556,6 +557,94 @@ pub async fn reorder_channels(
         }
     }
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+// ───────────────────────────── Fils (threads) ─────────────────────────────
+
+/// `POST /channels/:channel_id/threads` — démarre un fil sous un salon texte/annonces.
+/// Le fil (type 11) **hérite des surcharges de permission de son salon parent**.
+pub async fn create_thread(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(parent): Path<String>,
+    Json(req): Json<CreateThread>,
+) -> AppResult<Json<Channel>> {
+    let parent = parse_i64(&parent)?;
+    let (gid, _owner, _p) = pg::require_channel_perm(
+        &st.pool,
+        parent,
+        user.id.as_i64(),
+        perms::VIEW_CHANNEL | perms::CREATE_PUBLIC_THREADS,
+    )
+    .await?;
+    if gid == 0 {
+        return Err(AppError::bad_request(
+            "les fils ne sont pas disponibles en message privé",
+        ));
+    }
+    let parent_ch = fetch_channel(&st, parent).await?;
+    if !(parent_ch.kind == 0 || parent_ch.kind == 5) {
+        return Err(AppError::bad_request(
+            "un fil ne peut être créé que sous un salon texte ou d'annonces",
+        ));
+    }
+    let name = req.name.trim();
+    if name.is_empty() || name.chars().count() > 100 {
+        return Err(AppError::bad_request(
+            "nom de fil invalide (1 à 100 caractères)",
+        ));
+    }
+    let id = st.ids.next();
+    sqlx::query(
+        "INSERT INTO channels (id, guild_id, type, name, topic, position, parent_id, nsfw, rate_limit_per_user, created_at) \
+         VALUES (?, ?, 11, ?, NULL, 0, ?, 0, 0, ?)",
+    )
+    .bind(id.as_i64())
+    .bind(gid)
+    .bind(name)
+    .bind(parent)
+    .bind(now_ms())
+    .execute(&st.pool)
+    .await?;
+    let ch = fetch_channel(&st, id.as_i64()).await?;
+    emit(
+        &st,
+        EventScope::Channel {
+            guild_id: gid,
+            channel_id: id.as_i64(),
+        },
+        "THREAD_CREATE",
+        serde_json::to_value(&ch).unwrap_or_default(),
+    );
+    Ok(Json(ch))
+}
+
+/// `GET /channels/:channel_id/threads` — liste les fils visibles d'un salon.
+pub async fn list_threads(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(parent): Path<String>,
+) -> AppResult<Json<Vec<Channel>>> {
+    let parent = parse_i64(&parent)?;
+    let (gid, owner, _p) =
+        pg::require_channel_perm(&st.pool, parent, user.id.as_i64(), perms::VIEW_CHANNEL).await?;
+    let rows = sqlx::query(&format!(
+        "{CHANNEL_SELECT} WHERE parent_id = ? AND type IN (11, 12) ORDER BY id DESC"
+    ))
+    .bind(parent)
+    .fetch_all(&st.pool)
+    .await?;
+    let mut out = Vec::new();
+    for r in rows {
+        let ch = row_to_channel(r);
+        // Le fil hérite des surcharges du parent : on filtre sur la visibilité effective.
+        let p =
+            pg::channel_permissions(&st.pool, gid, owner, ch.id.as_i64(), user.id.as_i64()).await?;
+        if perms::has(p, perms::VIEW_CHANNEL) {
+            out.push(ch);
+        }
+    }
+    Ok(Json(out))
 }
 
 // ───────────────────────────── Helpers ─────────────────────────────
