@@ -10,6 +10,7 @@ pub mod extract;
 pub mod gateway;
 pub mod permissions;
 pub mod presence;
+pub mod routes_attachments;
 pub mod routes_auth;
 pub mod routes_chat;
 pub mod routes_discovery;
@@ -34,6 +35,7 @@ pub mod routes_webhooks;
 pub mod state;
 pub mod util;
 
+use axum::extract::DefaultBodyLimit;
 use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use config::Config;
@@ -161,6 +163,16 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/channels/:channel_id/typing",
             post(routes_messages::typing),
+        )
+        // Pièces jointes
+        .route(
+            "/channels/:channel_id/attachments",
+            post(routes_attachments::upload_attachment)
+                .layer(DefaultBodyLimit::max(26 * 1024 * 1024)),
+        )
+        .route(
+            "/attachments/:id/:filename",
+            get(routes_attachments::serve_attachment),
         )
         // Sondages
         .route(

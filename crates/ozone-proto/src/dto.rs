@@ -210,6 +210,17 @@ pub struct Reaction {
     pub me: bool,
 }
 
+/// Pièce jointe d'un message.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Attachment {
+    pub id: Snowflake,
+    pub filename: String,
+    pub content_type: String,
+    pub size: i64,
+    /// Chemin de téléchargement (`/attachments/<id>/<filename>`).
+    pub url: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Message {
     pub id: Snowflake,
@@ -232,6 +243,8 @@ pub struct Message {
     /// Présent si le message a été émis par un webhook (l'`author` porte alors le nom/avatar du webhook).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub webhook_id: Option<Snowflake>,
+    #[serde(default)]
+    pub attachments: Vec<Attachment>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -243,6 +256,9 @@ pub struct CreateMessage {
     /// Identifiant du message auquel on répond.
     #[serde(default)]
     pub reply_to: Option<Snowflake>,
+    /// Pièces jointes (déjà téléversées) à attacher à ce message.
+    #[serde(default)]
+    pub attachments: Vec<Snowflake>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

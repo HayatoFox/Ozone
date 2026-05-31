@@ -108,6 +108,12 @@ pub async fn bootstrap_state(cfg: &Config) -> anyhow::Result<AppState> {
         .map(|s| s.into_bytes())
         .unwrap_or_else(|| secret.clone().into_bytes());
 
+    // Répertoire des pièces jointes (créé si absent).
+    let upload_dir = std::env::var("OZONE_UPLOAD_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::env::temp_dir().join("ozone-uploads"));
+    let _ = std::fs::create_dir_all(&upload_dir);
+
     Ok(AppState {
         pool,
         ids,
@@ -116,5 +122,6 @@ pub async fn bootstrap_state(cfg: &Config) -> anyhow::Result<AppState> {
         hub,
         presence: Arc::new(crate::presence::Registry::new()),
         voice_secret: Arc::new(voice_secret),
+        upload_dir: Arc::new(upload_dir),
     })
 }

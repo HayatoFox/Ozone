@@ -10,7 +10,7 @@ use crate::util::parse_i64;
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use ozone_proto::dto::{
-    BulkDelete, CreateMessage, EditMessage, Message, Reaction, SearchResponse, User,
+    Attachment, BulkDelete, CreateMessage, EditMessage, Message, Reaction, SearchResponse, User,
 };
 use ozone_proto::{perms, Snowflake};
 use serde::Deserialize;
@@ -81,6 +81,7 @@ fn row_to_message_basic(r: SqliteRow) -> Message {
         referenced_message: None,
         nonce: r.get("nonce"),
         webhook_id,
+        attachments: Vec::new(),
     }
 }
 
@@ -136,10 +137,45 @@ async fn load_reactions(
     Ok(map)
 }
 
+/// Charge les pièces jointes (avec leur URL de téléchargement) pour un ensemble de messages.
+async fn load_attachments(st: &AppState, ids: &[i64]) -> AppResult<HashMap<i64, Vec<Attachment>>> {
+    let mut map: HashMap<i64, Vec<Attachment>> = HashMap::new();
+    if ids.is_empty() {
+        return Ok(map);
+    }
+    let list = ids
+        .iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!(
+        "SELECT id, message_id, filename, content_type, size FROM attachments \
+         WHERE message_id IN ({list}) ORDER BY id"
+    );
+    let rows = sqlx::query(&sql).fetch_all(&st.pool).await?;
+    for r in rows {
+        let mid: i64 = r.get("message_id");
+        let id: i64 = r.get("id");
+        let filename: String = r.get("filename");
+        map.entry(mid).or_default().push(Attachment {
+            id: Snowflake::from_i64(id),
+            url: format!("/attachments/{id}/{filename}"),
+            filename,
+            content_type: r.get("content_type"),
+            size: r.get::<i64, _>("size"),
+        });
+    }
+    Ok(map)
+}
+
 async fn hydrate(st: &AppState, mut msg: Message, user_id: i64) -> AppResult<Message> {
     let map = load_reactions(st, &[msg.id.as_i64()], user_id).await?;
     if let Some(rs) = map.get(&msg.id.as_i64()) {
         msg.reactions = rs.clone();
+    }
+    let amap = load_attachments(st, &[msg.id.as_i64()]).await?;
+    if let Some(a) = amap.get(&msg.id.as_i64()) {
+        msg.attachments = a.clone();
     }
     if let Some(ref_id) = msg.reference_id {
         msg.referenced_message = fetch_referenced(st, msg.channel_id.as_i64(), ref_id.as_i64())
@@ -328,9 +364,13 @@ pub async fn list_messages(
 
     let ids: Vec<i64> = msgs.iter().map(|m| m.id.as_i64()).collect();
     let reactions = load_reactions(&st, &ids, user.id.as_i64()).await?;
+    let attachments = load_attachments(&st, &ids).await?;
     for m in &mut msgs {
         if let Some(rs) = reactions.get(&m.id.as_i64()) {
             m.reactions = rs.clone();
+        }
+        if let Some(a) = attachments.get(&m.id.as_i64()) {
+            m.attachments = a.clone();
         }
         if let Some(ref_id) = m.reference_id {
             m.referenced_message = fetch_referenced(&st, m.channel_id.as_i64(), ref_id.as_i64())
@@ -354,9 +394,10 @@ pub async fn create_message(
     let (gid, _owner, perms_acc) =
         pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
     let content = req.content.trim_end();
-    if content.is_empty() || content.chars().count() > 4000 {
+    // Un message peut être vide s'il porte au moins une pièce jointe.
+    if (content.is_empty() && req.attachments.is_empty()) || content.chars().count() > 4000 {
         return Err(AppError::bad_request(
-            "contenu de message invalide (1 à 4000 caractères)",
+            "contenu de message invalide (1 à 4000 caractères, ou au moins une pièce jointe)",
         ));
     }
     // Timeout : un membre en sourdine ne peut pas écrire dans un salon de guilde.
@@ -437,6 +478,19 @@ pub async fn create_message(
     .await?;
 
     process_mentions(&st, cid, id.as_i64(), user.id.as_i64(), content).await?;
+
+    // Lie les pièces jointes déjà téléversées : uniquement les siennes, en attente, du même salon.
+    for att in &req.attachments {
+        sqlx::query(
+            "UPDATE attachments SET message_id = ? WHERE id = ? AND uploader_id = ? AND channel_id = ? AND message_id IS NULL",
+        )
+        .bind(id.as_i64())
+        .bind(att.as_i64())
+        .bind(user.id.as_i64())
+        .bind(cid)
+        .execute(&st.pool)
+        .await?;
+    }
 
     let msg = hydrate(
         &st,

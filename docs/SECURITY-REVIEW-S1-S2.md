@@ -68,8 +68,9 @@ cargo test -p ozone-api --test security_s16  # intrusion S16 (signalisation voca
 cargo test -p ozone-sfu --test auth          # S18 — authz du plan média (SFU)
 cargo test -p ozone-api --test discovery     # S20 — découverte de guildes publiques
 cargo test -p ozone-api --test polls         # S21 — sondages
-cargo test -p ozone-api                       # API : suite complète (104 tests)
-cargo test --workspace                        # API + SFU + proto (111 tests)
+cargo test -p ozone-api --test attachments   # S22 — pièces jointes
+cargo test -p ozone-api                       # API : suite complète (106 tests)
+cargo test --workspace                        # API + SFU + proto (113 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -401,5 +402,23 @@ Défenses (`routes_discovery.rs`) : l'annuaire n'expose **que** les guildes `dis
 
 Défenses (`routes_polls.rs`) : création gardée par `SEND_MESSAGES`, lecture/vote par `VIEW_CHANNEL` (+ `READ_MESSAGE_HISTORY` en lecture) ; le sondage est **scopé au salon** (`message_id` **et** `channel_id` — pas de vote inter-salons) ; les `answer_ids` sont **validés** contre les réponses du sondage, dédupliqués, et bornés à 1 hors multi-sélection ; vote refusé après expiration ; le vote **remplace** les votes existants de l'utilisateur (pas de bourrage) ; validations de création (question ≤ 300, 1–10 réponses ≤ 55). Tout est paramétré.
 
+## 26. S22 — Pièces jointes
+
+Téléversement (`POST /channels/:id/attachments`, multipart) + téléchargement (`GET /attachments/:id/:filename`) + liaison aux messages. Stockage fichier local (un fichier par identifiant). Écrit et audité par le mainteneur.
+
+| Vecteur testé | Test (`attachments.rs`) | Résultat |
+|---|---|---|
+| Téléverser en non-membre | `attachment_permissions_and_ownership` | `403` (`ATTACH_FILES` requis) |
+| Télécharger sans accès au salon / sans jeton | idem | `403` / `401` |
+| Attacher la pièce jointe **d'autrui** | idem | non liée (silencieux) |
+| Cycle téléverser → attacher (msg vide ok) → télécharger | `upload_attach_and_download` | contenu + type corrects |
+
+Défenses (`routes_attachments.rs`) :
+- **Téléversement** gardé par `VIEW_CHANNEL | SEND_MESSAGES | ATTACH_FILES` ; taille **plafonnée à 25 Mo** (limite de corps appliquée **uniquement** à cette route, pas globalement).
+- **Pas de traversée de chemin** : le fichier est nommé par **identifiant** sur disque ; le nom fourni n'entre jamais dans un chemin (juste affiché, assaini pour `Content-Disposition`).
+- **Liaison sûre** : à l'envoi d'un message, on ne lie que les pièces **du même auteur, du même salon, encore en attente** (`UPDATE … WHERE uploader_id = ? AND channel_id = ? AND message_id IS NULL`) — pas de vol de pièce jointe.
+- **Téléchargement non public** : gardé par `VIEW_CHANNEL` du salon de la pièce jointe (auth requise) — pas d'URL anonyme. *(Amélioration future : URLs signées/CDN.)*
+- **F8 (trouvée et corrigée à la revue)** : servir un contenu téléversé avec un `Content-Type` **contrôlé par l'attaquant** en `inline` permettait un **XSS stocké** (HTML/JS téléversé exécuté dans l'origine de l'instance). Corrigé : `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, et `Content-Disposition: attachment` (téléchargement forcé) pour tout type **hors** médias sûrs (`image/`/`audio/`/`video/`/`text/plain`).
+
 ---
-*Document vivant — revue effectuée pour S1 → S21 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, rate-limiting (R1/R6), RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S22 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

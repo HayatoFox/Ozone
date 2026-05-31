@@ -20,6 +20,8 @@ pub struct AppState {
     /// Secret de signature des **jetons vocaux** (partagé avec le nœud média SFU via
     /// `OZONE_VOICE_SECRET` ; à défaut, le secret JWT de l'instance).
     pub voice_secret: Arc<Vec<u8>>,
+    /// Répertoire de stockage des pièces jointes (`OZONE_UPLOAD_DIR`).
+    pub upload_dir: Arc<std::path::PathBuf>,
 }
 
 /// Runtime de l'instance (chargé au bootstrap).
