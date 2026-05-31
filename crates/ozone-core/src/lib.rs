@@ -7,11 +7,13 @@
 pub mod cache;
 pub mod client;
 pub mod gateway;
+pub mod instances;
 pub mod session;
 pub mod store;
 pub use cache::Cache;
 pub use client::ApiClient;
 pub use gateway::{connect as gateway_connect, GatewayConnection};
+pub use instances::{InstanceRegistry, PersistedInstance};
 pub use ozone_proto as proto;
 pub use session::{EventOutcome, Session};
 pub use store::Store;

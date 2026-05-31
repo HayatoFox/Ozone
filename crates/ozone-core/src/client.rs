@@ -3,7 +3,9 @@
 
 use crate::InstanceRef;
 use anyhow::{anyhow, Result};
-use ozone_proto::dto::{Channel, Guild, InstanceInfo, Message, TokenPair, UserProfile};
+use ozone_proto::dto::{
+    Channel, GateResponse, Guild, InstanceInfo, Message, TokenPair, UserProfile,
+};
 use ozone_proto::Snowflake;
 use serde::de::DeserializeOwned;
 
@@ -13,6 +15,9 @@ pub struct ApiClient {
     base: String,
     http: reqwest::Client,
     token: Option<String>,
+    /// Jeton de **gate d'instance** (si l'instance est protégée par mot de passe), joint à
+    /// l'inscription/connexion. Obtenu via [`ApiClient::gate`].
+    gate_token: Option<String>,
 }
 
 impl ApiClient {
@@ -22,6 +27,7 @@ impl ApiClient {
             base: base.into().trim_end_matches('/').to_string(),
             http: reqwest::Client::new(),
             token: None,
+            gate_token: None,
         }
     }
 
@@ -35,6 +41,11 @@ impl ApiClient {
     /// Définit (ou efface) le jeton d'accès porté par le client.
     pub fn set_token(&mut self, token: Option<String>) {
         self.token = token;
+    }
+
+    /// Définit (ou efface) le jeton de gate d'instance joint à l'inscription/connexion.
+    pub fn set_gate_token(&mut self, gate_token: Option<String>) {
+        self.gate_token = gate_token;
     }
 
     fn url(&self, path: &str) -> String {
@@ -71,20 +82,43 @@ impl ApiClient {
         self.get("/instance").await
     }
 
-    /// `POST /auth/register` — crée un compte, renvoie la paire de jetons.
+    /// `POST /instance/gate` — échange le **mot de passe d'instance** contre un jeton de gate
+    /// court. À stocker via [`ApiClient::set_gate_token`] avant l'inscription/connexion.
+    pub async fn gate(&self, password: &str) -> Result<String> {
+        let resp: GateResponse = self
+            .post(
+                "/instance/gate",
+                serde_json::json!({ "password": password }),
+            )
+            .await?;
+        Ok(resp.gate_token)
+    }
+
+    /// `POST /auth/register` — crée un compte, renvoie la paire de jetons. Joint le jeton de gate
+    /// s'il est défini.
     pub async fn register(&self, username: &str, email: &str, password: &str) -> Result<TokenPair> {
         self.post(
             "/auth/register",
-            serde_json::json!({ "username": username, "email": email, "password": password }),
+            serde_json::json!({
+                "username": username,
+                "email": email,
+                "password": password,
+                "gate_token": self.gate_token,
+            }),
         )
         .await
     }
 
-    /// `POST /auth/login` — connexion, renvoie la paire de jetons.
+    /// `POST /auth/login` — connexion, renvoie la paire de jetons. Joint le jeton de gate s'il
+    /// est défini.
     pub async fn login(&self, login: &str, password: &str) -> Result<TokenPair> {
         self.post(
             "/auth/login",
-            serde_json::json!({ "login": login, "password": password }),
+            serde_json::json!({
+                "login": login,
+                "password": password,
+                "gate_token": self.gate_token,
+            }),
         )
         .await
     }

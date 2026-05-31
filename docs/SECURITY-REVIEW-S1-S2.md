@@ -554,5 +554,18 @@ Premier écran (connexion à une instance) + vues guildes/salons/messages, en ar
 
 Tests : 5 unitaires du réducteur `update` (validation du formulaire, transitions d'écran, sélections guilde/salon, retour à l'écran de connexion sur échec) — exécutables **sans fenêtre** (les `Task` async ne tournent pas hors runtime Iced).
 
+## 35. S33 — Multi-instances + porte d'accès (cœur client)
+
+`ApiClient` gagne le **gate d'instance** (jeton de gate joint à l'inscription/connexion) et `ozone-core` un **registre multi-instances**. Aucune nouvelle surface **serveur** (les routes `/instance/gate` + champ `gate_token` existaient déjà, audités). Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé / examiné | Test | Résultat / défense |
+|---|---|---|
+| **Jetons au repos** (registre persisté) | `persist_excludes_tokens_and_roundtrips` | `to_persisted` ne sérialise **que** l'adresse/nom/id ; le JSON **ne contient aucun jeton** (assertion explicite). Au rechargement, les instances sont **non authentifiées** (reconnexion requise) — conforme à la posture « pas de secret en clair au repos » (§32/§34). |
+| Porte d'instance contournée | `gate_required_blocks_until_password_passed` | Sans jeton de gate, inscription/connexion **refusées** ; mauvais mot de passe d'instance ⇒ refus ; le bon mot de passe ⇒ jeton court (600 s) ⇒ accès. La vérification reste **côté serveur** (`check_gate`). |
+| Mot de passe d'instance en transit | (conception) | Envoyé à `/instance/gate` via `api_base` ⇒ **HTTPS forcé** sauf `http://` explicite (dev). |
+| Doublons d'instances | `add_dedups_by_address_and_selects_latest` | Déduplication par `api_base` normalisée ; un ré-ajout sans jeton **n'efface pas** les jetons en mémoire (`readd_preserves_existing_tokens`). |
+
+*Rappel d'intégration UI : lors du câblage de la persistance, n'écrire sur disque que `to_persisted()` (jamais `InstanceRef` complet).*
+
 ---
-*Document vivant — revue effectuée pour S1 → S32 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), temps réel dans l'UI (subscription Gateway), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S33 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), temps réel dans l'UI (subscription Gateway), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

@@ -20,7 +20,8 @@ pas de réutilisation directe de `ozone-proto`), **Tauri/Dioxus-webview** (rendu
 ```
 ozone-proto   types partagés (DTOs, perms, snowflakes, JWT)  ← déjà fait
 ozone-core    logique client multiplateforme :
-              - InstanceRef (registre multi-instances)        ← fait
+              - InstanceRef + InstanceRegistry (multi-instances) ← fait (S33 ; dédup, persistance SANS jetons, testé)
+              - Porte d'accès d'instance (gate)                 ← fait (S33 ; ApiClient.gate + gate_token, testé E2E)
               - ApiClient (REST typé, reqwest+rustls)          ← fait (S26, testé E2E vs serveur)
               - GatewayClient (WS temps réel + RESUME)         ← fait (S27/S31 ; reprise sans perte après coupure, testé E2E)
               - Store normalisé (guildes/salons/messages/présence)  ← fait (S28 ; applique les events Gateway, testé)
