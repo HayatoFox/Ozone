@@ -8,3 +8,6 @@ description = "Types partagés client/serveur pour Ozone (DTOs API, protocole ga
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+hmac = "0.12"
+sha2 = "0.10"
+base64 = "0.22"

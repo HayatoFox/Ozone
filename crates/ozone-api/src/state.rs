@@ -17,6 +17,9 @@ pub struct AppState {
     pub hub: broadcast::Sender<HubEvent>,
     /// Registre de présence (connexions actives + statut désiré).
     pub presence: Arc<crate::presence::Registry>,
+    /// Secret de signature des **jetons vocaux** (partagé avec le nœud média SFU via
+    /// `OZONE_VOICE_SECRET` ; à défaut, le secret JWT de l'instance).
+    pub voice_secret: Arc<Vec<u8>>,
 }
 
 /// Runtime de l'instance (chargé au bootstrap).

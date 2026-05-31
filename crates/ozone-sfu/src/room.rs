@@ -20,8 +20,10 @@ use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 use webrtc::track::track_remote::TrackRemote;
 
-/// Un pair connecté : sa `RTCPeerConnection` et les pistes locales qu'il **publie** vers la salle.
+/// Un pair connecté : sa `RTCPeerConnection`, son propriétaire (identifiant utilisateur, issu du
+/// jeton vocal vérifié) et les pistes locales qu'il **publie** vers la salle.
 struct Peer {
+    owner: String,
     pc: Arc<RTCPeerConnection>,
     published: Mutex<Vec<Arc<TrackLocalStaticRTP>>>,
 }
@@ -84,10 +86,12 @@ impl Sfu {
             .unwrap_or(0)
     }
 
-    /// Connecte un pair : applique l'offre, relaie les pistes, renvoie `(peer_id, réponse SDP)`.
+    /// Connecte un pair (identité `uid` déjà authentifiée par le jeton vocal) : applique l'offre,
+    /// relaie les pistes, renvoie `(peer_id, réponse SDP)`.
     pub async fn join(
         self: &Arc<Self>,
         room_id: &str,
+        uid: &str,
         offer_sdp: String,
     ) -> anyhow::Result<(String, String)> {
         let pc = Arc::new(self.api.new_peer_connection(Self::config()).await?);
@@ -152,6 +156,7 @@ impl Sfu {
             rooms.entry(room_id.to_string()).or_default().peers.insert(
                 peer_id.clone(),
                 Arc::new(Peer {
+                    owner: uid.to_string(),
                     pc: pc.clone(),
                     published: Mutex::new(Vec::new()),
                 }),
@@ -179,17 +184,29 @@ impl Sfu {
         }
     }
 
-    /// Déconnecte un pair (ferme sa `RTCPeerConnection`). Supprime la salle si elle devient vide.
-    pub async fn leave(&self, room_id: &str, peer_id: &str) {
+    /// Déconnecte un pair **uniquement si `requester_uid` en est le propriétaire** (les `peer_id`
+    /// sont séquentiels donc devinables : on impose la propriété). Renvoie `true` si retiré.
+    /// Ferme la `RTCPeerConnection` et supprime la salle si elle devient vide.
+    pub async fn leave(&self, room_id: &str, peer_id: &str, requester_uid: &str) -> bool {
         let mut rooms = self.rooms.lock().await;
-        if let Some(room) = rooms.get_mut(room_id) {
-            if let Some(p) = room.peers.remove(peer_id) {
-                let _ = p.pc.close().await;
-            }
-            if room.peers.is_empty() {
-                rooms.remove(room_id);
-            }
+        let Some(room) = rooms.get_mut(room_id) else {
+            return false;
+        };
+        let owned = room
+            .peers
+            .get(peer_id)
+            .map(|p| p.owner == requester_uid)
+            .unwrap_or(false);
+        if !owned {
+            return false;
         }
+        if let Some(p) = room.peers.remove(peer_id) {
+            let _ = p.pc.close().await;
+        }
+        if room.peers.is_empty() {
+            rooms.remove(room_id);
+        }
+        true
     }
 }
 
@@ -204,8 +221,8 @@ mod tests {
         assert_eq!(sfu.room_count().await, 0);
         assert_eq!(sfu.peer_count("absente").await, 0);
 
-        // `leave` sur une salle inexistante est sans effet (pas de panique).
-        sfu.leave("absente", "p1").await;
+        // `leave` sur une salle inexistante est sans effet (pas de panique) et renvoie false.
+        assert!(!sfu.leave("absente", "p1", "u1").await);
         assert_eq!(sfu.room_count().await, 0);
     }
 }

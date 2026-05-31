@@ -130,7 +130,14 @@ pub async fn update_own_voice_state(
             .ok_or_else(|| AppError::internal("état vocal introuvable après insertion"))?;
         emit_state(&st, gid, &vs).await;
 
-        let token = crypto::jwt_encode(&st.jwt_secret, &me.to_string(), "voice", VOICE_TOKEN_TTL);
+        // Jeton vocal : signé avec le secret partagé SFU ; `sub = "<user>.<channel>"` pour que
+        // le SFU vérifie l'identité ET que le salon demandé correspond.
+        let token = crypto::jwt_encode(
+            &st.voice_secret,
+            &format!("{me}.{cid}"),
+            "voice",
+            VOICE_TOKEN_TTL,
+        );
         let connection = VoiceConnectionInfo {
             token,
             endpoint: VOICE_ENDPOINT.to_string(),

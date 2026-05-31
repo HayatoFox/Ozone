@@ -48,7 +48,7 @@
 | **R4** | ~~Info~~ **Résolu (S6b)** | ~~`join_invite` ne vérifie pas un **bannissement**~~. | Contrôle de ban ajouté dans `join_invite` (cf. §10). |
 | **R5** | Faible | **Course sur le quota d'invitation d'instance** : la vérification `uses < max_uses` et la consommation `uses + 1` ne sont pas atomiques (deux statements séparés). Deux inscriptions concurrentes avec la même invitation à usage unique pourraient dépasser le quota de 1. | Consommation atomique via `UPDATE … WHERE uses < max_uses` à l'intérieur d'une transaction `BEGIN IMMEDIATE` (passe de durcissement transactionnel de `register`). Risque réel faible : scénario de bootstrap self-host, très faible concurrence sur la rédemption. |
 | **R6** | Moyenne | **Exécution de webhook non authentifiée et sans rate-limit** (S7) : un détenteur du jeton peut poster sans session ni quota → spam/abus. | Couche de rate-limit (cf. R1) avec **quota dédié par webhook** ; option de désactivation/rotation rapide du jeton. À traiter avant exposition publique. |
-| **R7** | Élevée (plan média, **avant exposition**) | **SFU sans authz** (S17) : `POST /sfu/rooms/:room/peers` n'exige/vérifie **pas** le jeton vocal émis par l'API → n'importe qui pourrait rejoindre un salon média en connaissant l'identifiant. | Le SFU **doit vérifier le jeton `VOICE_SERVER_UPDATE`** (secret partagé `OZONE_VOICE_SECRET`) et que le `room` correspond, avant d'admettre un pair. Bloquant **avant tout déploiement du média** ; sans impact tant que le SFU n'est pas exposé. Cf. `crates/ozone-sfu/README.md`. |
+| **R7** | ~~Élevée~~ **Résolu (S18)** | ~~SFU sans authz~~ : le SFU vérifie désormais le jeton vocal (signature HS256 + `kind` + salon) et la propriété du pair au départ, **fail-closed** sans `OZONE_VOICE_SECRET`. | Cf. §23 + `crates/ozone-sfu/tests/auth.rs`. |
 
 ## 4. Comment rejouer
 
@@ -65,7 +65,9 @@ cargo test -p ozone-api --test security_s13  # intrusion S13 (gestion de guilde)
 cargo test -p ozone-api --test invites       # S14 — aperçu & révocation d'invitations
 cargo test -p ozone-api --test leave_guild   # S15 — quitter une guilde
 cargo test -p ozone-api --test security_s16  # intrusion S16 (signalisation vocale)
-cargo test -p ozone-api                       # suite complète (99 tests)
+cargo test -p ozone-sfu --test auth          # S18 — authz du plan média (SFU)
+cargo test -p ozone-api                       # API : suite complète (99 tests)
+cargo test --workspace                        # API + SFU + proto (106 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -348,7 +350,27 @@ Crate **séparée** `ozone-sfu` (binaire média) : pile WebRTC (`webrtc-rs`), c�
 - **R7 (noté, bloquant avant exposition)** : le SFU **ne vérifie pas encore le jeton vocal** de l'API → le plan média est **non authentifié** (cf. tableau §3 et `ozone-sfu/README.md`). Sans impact tant que le SFU n'est pas déployé/exposé ; **à brancher impérativement** (vérification du jeton `VOICE_SERVER_UPDATE` + correspondance du salon) avant toute mise en service.
 - Test unitaire : construction du SFU (MediaEngine + intercepteurs) et registre de salles ; le chemin média complet (RTP/ICE/DTLS) est un test **E2E manuel** (deux clients WebRTC réels).
 
-> Rappel : `VOICE_SERVER_UPDATE` (qui porte le jeton) est déjà diffusé en **portée `User`** par l'API (S16) — le jeton ne fuite pas aux autres. Reste à ce que le SFU le **consomme et le vérifie**.
+> Rappel : `VOICE_SERVER_UPDATE` (qui porte le jeton) est diffusé en **portée `User`** par l'API (S16) — le jeton ne fuite pas aux autres.
+
+## 23. S18 — Authentification du plan média (résout R7)
+
+Le SFU **vérifie désormais le jeton vocal** avant toute opération. Audité par le mainteneur. **R7 résolu.**
+
+| Vecteur testé | Test (`ozone-sfu/tests/auth.rs`) | Résultat |
+|---|---|---|
+| SFU sans secret configuré | `fail_closed_without_secret` | `503` (**fail-closed**) |
+| Jeton absent/altéré/signé avec un autre secret | `rejects_invalid_token` | `401` |
+| Jeton valide mais **salon ≠ celui du jeton** | `rejects_wrong_room` | `403` |
+| Jeton valide + salon correct | `valid_token_passes_auth_then_sfu_rejects_bad_sdp` | auth franchie (SDP invalide → `400`) |
+| Départ : jeton requis + **propriété** du pair | `leave_requires_token_and_ownership` | `503`/`401`/`403` |
+
+Conception :
+- **Primitives JWT partagées** : `ozone_proto::token` (HS256 pur Rust, **sans `ring`**) factorise l'émission (API) et la vérification (SFU) — une seule implémentation, testée (`round_trip_and_tamper`).
+- **Jeton vocal** : `sub = "<user_id>.<channel_id>"`, `kind = "voice"`, TTL 1 h, signé avec un **secret partagé** (`OZONE_VOICE_SECRET`, repli sur le secret JWT de l'instance côté API). Le SFU recharge ce secret depuis l'environnement.
+- **Contrôle du salon** : le SFU exige que le `:room` de l'URL == `channel_id` du jeton (anti-rejeu inter-salons).
+- **Départ authentifié** : les `peer_id` étant séquentiels (devinables), `DELETE` exige le jeton **et** que l'`user_id` corresponde au **propriétaire** du pair (anti-déconnexion d'autrui).
+- **Fail-closed** : sans `OZONE_VOICE_SECRET`, le SFU refuse toute connexion (`503`) — pas de mode « ouvert » accidentel.
+- **Isolation crypto maintenue** : `ozone-proto` n'introduit que `hmac`/`sha2`/`base64` (pas de `ring`) ; `ring` reste confiné à `ozone-sfu` (via WebRTC).
 
 ---
-*Document vivant — revue effectuée pour S1 → S17 ; à reconduire à chaque couche. À compléter par : **authz du plan média (R7, bloquant avant exposition)**, renégociation WS (mesh N-à-N), E2EE DAVE/MLS et son audit, rate-limiting (R1/R6), RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S18 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N), E2EE DAVE/MLS et son audit, rate-limiting (R1/R6), RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

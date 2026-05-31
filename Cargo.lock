@@ -1521,8 +1521,11 @@ dependencies = [
 name = "ozone-proto"
 version = "0.1.0"
 dependencies = [
+ "base64",
+ "hmac",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]
@@ -1531,9 +1534,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "ozone-proto",
  "serde",
  "serde_json",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
  "webrtc",

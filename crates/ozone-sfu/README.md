@@ -28,16 +28,20 @@ mixage ni transcodage → faible latence, faible CPU, compatible E2EE). Cf.
   entrantes sont recopiées vers les autres pairs.
 - ✅ Signalisation HTTP (`POST`/`DELETE`), endpoint `/health`.
 
+## Authentification (fait — S18)
+
+Le SFU **vérifie le jeton vocal** émis par l'API (`VOICE_SERVER_UPDATE`) avant toute opération :
+signature HS256 (`ozone_proto::token`, secret partagé `OZONE_VOICE_SECRET`), `kind = "voice"`,
+expiration, et **correspondance du salon** (`:room` == `channel_id` du jeton). Le départ exige le
+jeton **et** la propriété du pair. **Fail-closed** : sans `OZONE_VOICE_SECRET`, toute connexion est
+refusée (`503`). Cf. `tests/auth.rs`.
+
 ## À faire (prochaines étapes média)
 
-1. **Authz du plan média** *(sécurité — R7)* : le SFU doit **vérifier le jeton vocal** émis par
-   l'API (`VOICE_SERVER_UPDATE`) avant d'admettre un pair dans un salon — secret partagé via
-   `OZONE_VOICE_SECRET`. Aujourd'hui `join` fait confiance au `:room` de l'URL (plan média **non
-   authentifié**) : à brancher **avant toute exposition**.
-2. **Renégociation poussée (WS)** : pour que les pairs **déjà connectés** reçoivent un nouveau
+1. **Renégociation poussée (WS)** : pour que les pairs **déjà connectés** reçoivent un nouveau
    venu (mesh N-à-N complet), une signalisation WebSocket persistante (offres serveur→client).
-3. **E2EE DAVE/MLS** : surchiffrement du média (le SFU relaie sans déchiffrer).
-4. **TURN/STUN** dédiés, sélection de couche (simulcast/SVC), bitrate adaptatif, resume vocal.
+2. **E2EE DAVE/MLS** : surchiffrement du média (le SFU relaie sans déchiffrer).
+3. **TURN/STUN** dédiés, sélection de couche (simulcast/SVC), bitrate adaptatif, resume vocal.
 
 ## Lancer
 

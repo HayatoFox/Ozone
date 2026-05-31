@@ -6,3 +6,4 @@
 //! `ring`/`rustls`, confinés à ce binaire ; l'API REST/Gateway reste sans `ring`).
 
 pub mod room;
+pub mod server;

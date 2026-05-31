@@ -1,51 +1,14 @@
-//! Binaire du nœud média SFU Ozone : signalisation HTTP (offre/réponse SDP) au-dessus du cœur SFU.
+//! Binaire du nœud média SFU Ozone : signalisation HTTP (offre/réponse SDP) + authentification
+//! par jeton vocal, au-dessus du cœur SFU. Processus **séparé** de l'API.
 //!
-//! Processus séparé de l'API. L'API émet `VOICE_SERVER_UPDATE { token, endpoint }` ; le client
-//! présente son offre SDP ici et reçoit la réponse, puis le média RTP/SRTP circule en UDP.
+//! Variables d'environnement :
+//! - `OZONE_SFU_BIND` (défaut `127.0.0.1:8081`).
+//! - `OZONE_VOICE_SECRET` : secret partagé avec l'API pour vérifier les jetons vocaux.
+//!   **Requis** — sans lui, le SFU refuse toute connexion (fail-closed).
 
-use axum::extract::{Path, State};
-use axum::http::StatusCode;
-use axum::routing::{delete, get, post};
-use axum::{Json, Router};
 use ozone_sfu::room::Sfu;
-use serde::{Deserialize, Serialize};
+use ozone_sfu::server::{build_router, AppState};
 use std::sync::Arc;
-
-#[derive(Deserialize)]
-struct OfferReq {
-    sdp: String,
-}
-
-#[derive(Serialize)]
-struct AnswerResp {
-    peer_id: String,
-    sdp: String,
-}
-
-/// `POST /sfu/rooms/:room/peers` — soumet une offre SDP, reçoit la réponse + un identifiant de pair.
-async fn join(
-    State(sfu): State<Arc<Sfu>>,
-    Path(room): Path<String>,
-    Json(req): Json<OfferReq>,
-) -> Result<Json<AnswerResp>, (StatusCode, String)> {
-    match sfu.join(&room, req.sdp).await {
-        Ok((peer_id, sdp)) => Ok(Json(AnswerResp { peer_id, sdp })),
-        Err(e) => Err((StatusCode::BAD_REQUEST, e.to_string())),
-    }
-}
-
-/// `DELETE /sfu/rooms/:room/peers/:peer_id` — déconnecte un pair.
-async fn leave(
-    State(sfu): State<Arc<Sfu>>,
-    Path((room, peer_id)): Path<(String, String)>,
-) -> StatusCode {
-    sfu.leave(&room, &peer_id).await;
-    StatusCode::NO_CONTENT
-}
-
-async fn health() -> &'static str {
-    "ok"
-}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -56,12 +19,21 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let sfu = Sfu::new()?;
-    let app = Router::new()
-        .route("/health", get(health))
-        .route("/sfu/rooms/:room/peers", post(join))
-        .route("/sfu/rooms/:room/peers/:peer_id", delete(leave))
-        .with_state(sfu);
+    let voice_secret = std::env::var("OZONE_VOICE_SECRET")
+        .ok()
+        .map(|s| s.into_bytes());
+    if voice_secret.is_none() {
+        tracing::warn!(
+            "OZONE_VOICE_SECRET non défini : le SFU refusera toute connexion (fail-closed). \
+             Définissez le même secret que l'API."
+        );
+    }
+
+    let state = AppState {
+        sfu: Sfu::new()?,
+        voice_secret: Arc::new(voice_secret),
+    };
+    let app = build_router(state);
 
     let bind = std::env::var("OZONE_SFU_BIND").unwrap_or_else(|_| "127.0.0.1:8081".to_string());
     let listener = tokio::net::TcpListener::bind(&bind).await?;

@@ -102,6 +102,12 @@ pub async fn bootstrap_state(cfg: &Config) -> anyhow::Result<AppState> {
 
     let (hub, _rx) = broadcast::channel::<HubEvent>(1024);
 
+    // Secret des jetons vocaux : partagé avec le SFU via OZONE_VOICE_SECRET ; sinon le secret JWT.
+    let voice_secret = std::env::var("OZONE_VOICE_SECRET")
+        .ok()
+        .map(|s| s.into_bytes())
+        .unwrap_or_else(|| secret.clone().into_bytes());
+
     Ok(AppState {
         pool,
         ids,
@@ -109,5 +115,6 @@ pub async fn bootstrap_state(cfg: &Config) -> anyhow::Result<AppState> {
         instance: Arc::new(runtime),
         hub,
         presence: Arc::new(crate::presence::Registry::new()),
+        voice_secret: Arc::new(voice_secret),
     })
 }

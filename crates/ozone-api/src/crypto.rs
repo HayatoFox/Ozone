@@ -6,12 +6,10 @@ use argon2::password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, Salt
 use argon2::Argon2;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64;
 use base64::Engine;
-use hmac::{Hmac, Mac};
-use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::time::{SystemTime, UNIX_EPOCH};
 
-type HmacSha256 = Hmac<Sha256>;
+// JWT HS256 : implémentation partagée dans `ozone_proto::token` (réutilisée par le SFU).
+pub use ozone_proto::token::Claims;
 
 // ───────────────────────────── Mots de passe ─────────────────────────────
 
@@ -51,71 +49,14 @@ pub fn sha256_hex(s: &str) -> String {
     hex
 }
 
-// ─────────────────────────── JWT HS256 (maison) ───────────────────────────
+// ─────────────────────────── JWT HS256 (délégué à ozone_proto::token) ───────────────────────────
 
-#[derive(Serialize, Deserialize)]
-pub struct Claims {
-    pub sub: String,
-    pub iat: u64,
-    pub exp: u64,
-    pub kind: String,
-}
-
-fn now_secs() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
-}
-
+/// Émet un JWT HS256 (cf. `ozone_proto::token`).
 pub fn jwt_encode(secret: &[u8], sub: &str, kind: &str, ttl_secs: u64) -> String {
-    let header = B64.encode(br#"{"alg":"HS256","typ":"JWT"}"#);
-    let iat = now_secs();
-    let claims = Claims {
-        sub: sub.to_string(),
-        iat,
-        exp: iat + ttl_secs,
-        kind: kind.to_string(),
-    };
-    let payload = B64.encode(serde_json::to_vec(&claims).unwrap_or_default());
-    let signing_input = format!("{header}.{payload}");
-    let sig = hs256(secret, signing_input.as_bytes());
-    format!("{signing_input}.{sig}")
+    ozone_proto::token::encode(secret, sub, kind, ttl_secs)
 }
 
+/// Vérifie un JWT HS256 (signature, `kind`, expiration).
 pub fn jwt_verify(secret: &[u8], token: &str, expected_kind: &str) -> Option<Claims> {
-    let mut parts = token.split('.');
-    let h = parts.next()?;
-    let p = parts.next()?;
-    let s = parts.next()?;
-    if parts.next().is_some() {
-        return None;
-    }
-    let signing_input = format!("{h}.{p}");
-    let expected = hs256(secret, signing_input.as_bytes());
-    if !constant_eq(expected.as_bytes(), s.as_bytes()) {
-        return None;
-    }
-    let claims: Claims = serde_json::from_slice(&B64.decode(p).ok()?).ok()?;
-    if claims.kind != expected_kind || claims.exp < now_secs() {
-        return None;
-    }
-    Some(claims)
-}
-
-fn hs256(secret: &[u8], data: &[u8]) -> String {
-    let mut mac = HmacSha256::new_from_slice(secret).expect("clé HMAC de longueur valide");
-    mac.update(data);
-    B64.encode(mac.finalize().into_bytes())
-}
-
-fn constant_eq(a: &[u8], b: &[u8]) -> bool {
-    if a.len() != b.len() {
-        return false;
-    }
-    let mut r = 0u8;
-    for (x, y) in a.iter().zip(b.iter()) {
-        r |= x ^ y;
-    }
-    r == 0
+    ozone_proto::token::verify(secret, token, expected_kind)
 }
