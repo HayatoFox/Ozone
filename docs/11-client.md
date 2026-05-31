@@ -22,7 +22,7 @@ ozone-proto   types partagés (DTOs, perms, snowflakes, JWT)  ← déjà fait
 ozone-core    logique client multiplateforme :
               - InstanceRef (registre multi-instances)        ← fait
               - ApiClient (REST typé, reqwest+rustls)          ← fait (S26, testé E2E vs serveur)
-              - GatewayClient (WS temps réel)                  ← à faire
+              - GatewayClient (WS temps réel)                  ← fait (S27, testé E2E : reçoit un MESSAGE_CREATE live)
               - Store normalisé (guildes/salons/messages/présence) + cache  ← à faire
               - Moteur vocal (signalisation + WebRTC client)   ← à faire (pair du SFU)
 ozone-ui      application Iced (vues, thèmes, navigation)      ← à faire
@@ -39,9 +39,8 @@ reverse-proxy peut exposer l'API sous un préfixe (l'inclure alors dans l'adress
 
 ## Prochaines étapes
 
-1. `ozone-core::GatewayClient` : connexion WS `/gateway`, `IDENTIFY`, réception/typage des
-   événements (`MESSAGE_CREATE`, `PRESENCE_UPDATE`, `VOICE_STATE_UPDATE`…), heartbeat, RESUME.
-2. Store normalisé + réconciliation REST↔Gateway, cache local (SQLite).
-3. `ozone-ui` (Iced) : écran de connexion à une instance (adresse + gate), switcher multi-instances,
+1. Store normalisé + réconciliation REST↔Gateway, cache local (SQLite).
+2. `ozone-ui` (Iced) : écran de connexion à une instance (adresse + gate), switcher multi-instances,
    liste guildes/salons, fil de messages, MP, présence, paramètres/thèmes.
-4. Moteur vocal client (signalisation via l'API → SFU `ozone-sfu`).
+3. Moteur vocal client (signalisation via l'API → SFU `ozone-sfu`).
+4. `GatewayClient` : RESUME après coupure (reprise sans re-IDENTIFY).

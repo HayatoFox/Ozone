@@ -77,6 +77,46 @@ async fn client_round_trip() {
 }
 
 #[tokio::test]
+async fn gateway_receives_live_message() {
+    let base = spawn_server().await;
+    let mut client = ApiClient::new(&base);
+    let tokens = client
+        .register("carol", "carol@core.fr", "motdepasse")
+        .await
+        .expect("register");
+    let access = tokens.access_token;
+    client.set_token(Some(access.clone()));
+    let guild = client.create_guild("G").await.expect("create_guild");
+    let cid = client.list_channels(guild.id).await.expect("channels")[0].id;
+
+    // Connexion Gateway → READY.
+    let mut conn = ozone_core::gateway_connect(&base, &access)
+        .await
+        .expect("gateway connect");
+    assert!(
+        conn.ready.get("user").is_some(),
+        "READY contient l'utilisateur"
+    );
+
+    // Un message envoyé via REST doit arriver en temps réel sur la Gateway.
+    // (carol reçoit aussi son propre PRESENCE_UPDATE à la connexion : on filtre le MESSAGE_CREATE.)
+    client
+        .send_message(cid, "temps réel !")
+        .await
+        .expect("send");
+    let content = loop {
+        let ev = tokio::time::timeout(std::time::Duration::from_secs(5), conn.next_event())
+            .await
+            .expect("délai dépassé en attendant l'événement")
+            .expect("flux Gateway fermé");
+        if ev.t.as_deref() == Some("MESSAGE_CREATE") {
+            break ev.d.unwrap()["content"].as_str().unwrap().to_string();
+        }
+    };
+    assert_eq!(content, "temps réel !");
+}
+
+#[tokio::test]
 async fn login_rejects_bad_password() {
     let base = spawn_server().await;
     let client = ApiClient::new(&base);

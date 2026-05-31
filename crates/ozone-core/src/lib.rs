@@ -5,7 +5,9 @@
 //! (cf. `docs/01-architecture.md`, `docs/02-stack-technique.md`).
 
 pub mod client;
+pub mod gateway;
 pub use client::ApiClient;
+pub use gateway::{connect as gateway_connect, GatewayConnection};
 pub use ozone_proto as proto;
 
 use ozone_proto::Snowflake;
