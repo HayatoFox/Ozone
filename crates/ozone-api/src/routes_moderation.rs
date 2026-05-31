@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -137,6 +137,16 @@ pub async fn ban_member(
         req.reason.as_deref(),
     )
     .await;
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_BAN_ADD",
+        json!({ "guild_id": gid.to_string(), "user_id": target.to_string() }),
+    );
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_MEMBER_REMOVE",
+        json!({ "guild_id": gid.to_string(), "user_id": target.to_string() }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -166,6 +176,11 @@ pub async fn unban_member(
         None,
     )
     .await;
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_BAN_REMOVE",
+        json!({ "guild_id": gid.to_string(), "user_id": target.to_string() }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -270,6 +285,13 @@ pub async fn update_member(
         record_audit(&st, gid, me, Some(target), "member_timeout", None).await;
     }
 
+    if req.nick.is_some() || req.communication_disabled_until.is_some() {
+        st.publish(
+            EventScope::Guild(gid),
+            "GUILD_MEMBER_UPDATE",
+            json!({ "guild_id": gid.to_string(), "user_id": target.to_string() }),
+        );
+    }
     Ok(Json(json!({ "ok": true })))
 }
 

@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -94,7 +94,7 @@ pub async fn create_role(
     .execute(&st.pool)
     .await?;
 
-    Ok(Json(Role {
+    let role = Role {
         id,
         guild_id: Snowflake::from_i64(gid),
         name,
@@ -104,7 +104,13 @@ pub async fn create_role(
         permissions: (permissions as u64).to_string(),
         mentionable: mentionable != 0,
         managed: false,
-    }))
+    };
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_ROLE_CREATE",
+        serde_json::to_value(&role).unwrap_or_default(),
+    );
+    Ok(Json(role))
 }
 
 /// `PATCH /guilds/:guild_id/roles/:role_id`
@@ -162,7 +168,13 @@ pub async fn update_role(
         .execute(&st.pool)
         .await?;
 
-    Ok(Json(row_to_role(fetch_role(&st, gid, rid).await?)))
+    let role = row_to_role(fetch_role(&st, gid, rid).await?);
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_ROLE_UPDATE",
+        serde_json::to_value(&role).unwrap_or_default(),
+    );
+    Ok(Json(role))
 }
 
 /// `DELETE /guilds/:guild_id/roles/:role_id`
@@ -200,6 +212,11 @@ pub async fn delete_role(
         .bind(rid)
         .execute(&st.pool)
         .await?;
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_ROLE_DELETE",
+        serde_json::json!({ "role_id": rid.to_string(), "guild_id": gid.to_string() }),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -242,6 +259,11 @@ pub async fn add_member_role(
         .bind(rid)
         .execute(&st.pool)
         .await?;
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_MEMBER_UPDATE",
+        serde_json::json!({ "guild_id": gid.to_string(), "user_id": target.to_string(), "role_id": rid.to_string(), "added": true }),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -272,6 +294,11 @@ pub async fn remove_member_role(
         .bind(rid)
         .execute(&st.pool)
         .await?;
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_MEMBER_UPDATE",
+        serde_json::json!({ "guild_id": gid.to_string(), "user_id": target.to_string(), "role_id": rid.to_string(), "added": false }),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -327,6 +354,11 @@ pub async fn set_overwrite(
     .bind(deny as i64)
     .execute(&st.pool)
     .await?;
+    st.publish(
+        EventScope::Guild(gid),
+        "CHANNEL_UPDATE",
+        serde_json::json!({ "id": cid.to_string(), "guild_id": gid.to_string() }),
+    );
     Ok(Json(PermissionOverwrite {
         id: Snowflake::from_i64(tid),
         kind,
@@ -343,11 +375,17 @@ pub async fn delete_overwrite(
 ) -> AppResult<Json<serde_json::Value>> {
     let cid = parse_i64(&cid)?;
     let tid = parse_i64(&tid)?;
-    pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::MANAGE_ROLES).await?;
+    let (gid, _owner, _p) =
+        pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::MANAGE_ROLES).await?;
     sqlx::query("DELETE FROM channel_overwrites WHERE channel_id = ? AND target_id = ?")
         .bind(cid)
         .bind(tid)
         .execute(&st.pool)
         .await?;
+    st.publish(
+        EventScope::Guild(gid),
+        "CHANNEL_UPDATE",
+        serde_json::json!({ "id": cid.to_string(), "guild_id": gid.to_string() }),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }

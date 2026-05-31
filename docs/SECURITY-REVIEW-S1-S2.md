@@ -56,7 +56,8 @@ cargo test -p ozone-api --test security      # intrusion S1/S2
 cargo test -p ozone-api --test security_s3   # intrusion S3
 cargo test -p ozone-api --test security_s7   # intrusion S7 (webhooks, recherche, événements)
 cargo test -p ozone-api --test security_s8   # intrusion S8 (lecture, mentions, notifications)
-cargo test -p ozone-api                       # suite complète (76 tests)
+cargo test -p ozone-api --test realtime      # S9 — émission/portée des événements Gateway
+cargo test -p ozone-api                       # suite complète (77 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -211,5 +212,21 @@ Défenses (`routes_notifications.rs` + `routes_messages.rs`) :
 - **Parseur de mentions** sûr (indices sur octets ASCII uniquement → pas de panique sur frontière de caractère) ; aucune interpolation de chaîne utilisateur en SQL.
 - Note négligeable : `ack` ne vérifie pas que `message_id` appartient bien au salon (effet limité au seul badge non-lu de l'appelant ; pas de fuite ni d'impact tiers).
 
+## 14. S9 — Émission d'événements Gateway (temps réel)
+
+Diffusion des mutations de guilde (membres : join/kick/ban/timeout/rôles ; rôles : CRUD ; surcharges de salon ; événements programmés : CRUD) sur le bus Gateway via `AppState::publish`. **Aucune faille exploitable.** Le point sensible est la **confidentialité du routage** : un événement ne doit jamais atteindre quelqu'un qui n'y a pas droit.
+
+| Vecteur testé | Test (`realtime.rs`) | Résultat |
+|---|---|---|
+| Les mutations émettent bien les événements attendus | `guild_mutations_emit_scoped_events` | `GUILD_MEMBER_ADD/REMOVE`, `GUILD_ROLE_CREATE`, `CHANNEL_CREATE`, `GUILD_BAN_ADD` présents |
+| Portée correcte (rôle → guilde, salon → salon) | idem | `EventScope::Guild` / `EventScope::Channel` |
+| **Confidentialité** : un non-membre reçoit-il les événements de la guilde ? | idem | `should_deliver` → **false** |
+
+Défenses :
+- **Séparation publication / livraison** : `publish` ne fait que déposer l'événement avec sa **portée** ; la décision « qui le reçoit » reste centralisée dans `gateway::should_deliver` (déjà audité en S5), recalculée par connexion. Aucun handler ne pousse directement vers une socket.
+- **Portées prudentes** : mutations de membres/rôles/événements → `EventScope::Guild` (membres only) ; création/màj de salon → `EventScope::Channel` (réévalue `VIEW_CHANNEL`, donc respecte les salons privés) ; **suppression** de salon et **changement de surcharge** → `EventScope::Guild` (le calcul par salon n'est plus fiable une fois l'accès retiré/le salon supprimé — on notifie tous les membres, charge à eux de réconcilier ; aucune donnée sensible dans le payload, seulement des identifiants).
+- **Payloads minimaux** pour les événements de gestion (identifiants seulement) — pas de fuite de contenu via un événement à portée large.
+- `publish` est *fire-and-forget* (l'absence d'abonné n'est pas une erreur) : aucune mutation ne peut échouer à cause de la Gateway.
+
 ---
-*Document vivant — revue effectuée pour S1 → S8 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), émission d'événements Gateway sur les mutations (read state / notifs en temps réel), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S9 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), présence/statut + RESUME Gateway, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), émission d'événements pour relations/MP, et un audit du futur chiffrement vocal DAVE/MLS.*

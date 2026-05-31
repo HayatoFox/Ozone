@@ -8,7 +8,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -210,7 +210,7 @@ pub async fn create_event(
     .execute(&st.pool)
     .await?;
 
-    Ok(Json(ScheduledEvent {
+    let event = ScheduledEvent {
         id,
         guild_id: Snowflake::from_i64(gid),
         channel_id: channel_id.map(Snowflake::from_i64),
@@ -225,7 +225,13 @@ pub async fn create_event(
         status: 1,
         interested_count: 0,
         created_at: now as u64,
-    }))
+    };
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_SCHEDULED_EVENT_CREATE",
+        serde_json::to_value(&event).unwrap_or_default(),
+    );
+    Ok(Json(event))
 }
 
 /// `GET /guilds/:guild_id/events/:event_id` — Détail d'un événement.
@@ -354,7 +360,13 @@ pub async fn update_event(
 
     let updated = fetch_event(&st, gid, eid).await?;
     let count = interested_count(&st, eid).await?;
-    Ok(Json(row_to_event(&updated, count)))
+    let event = row_to_event(&updated, count);
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_SCHEDULED_EVENT_UPDATE",
+        serde_json::to_value(&event).unwrap_or_default(),
+    );
+    Ok(Json(event))
 }
 
 /// `DELETE /guilds/:guild_id/events/:event_id` — Supprime un événement.
@@ -383,6 +395,11 @@ pub async fn delete_event(
         .execute(&st.pool)
         .await?;
 
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_SCHEDULED_EVENT_DELETE",
+        json!({ "id": eid.to_string(), "guild_id": gid.to_string() }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 

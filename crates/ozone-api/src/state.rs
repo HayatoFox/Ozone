@@ -64,3 +64,16 @@ pub struct HubEvent {
     pub d: Value,
     pub scope: EventScope,
 }
+
+impl AppState {
+    /// Publie un événement sur le bus Gateway. Le routage (qui le reçoit) est ensuite
+    /// appliqué par `gateway::should_deliver` selon la **portée** — aucune fuite possible.
+    /// `Err` ignorée : absence d'abonné (aucune session connectée) n'est pas une erreur.
+    pub fn publish(&self, scope: EventScope, t: &str, d: Value) {
+        let _ = self.hub.send(HubEvent {
+            t: t.to_string(),
+            d,
+            scope,
+        });
+    }
+}

@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -95,6 +95,11 @@ pub async fn kick_member(
         None,
     )
     .await;
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_MEMBER_REMOVE",
+        serde_json::json!({ "guild_id": gid.to_string(), "user_id": target.to_string() }),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -230,6 +235,11 @@ pub async fn join_invite(
         .bind(&code)
         .execute(&st.pool)
         .await?;
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_MEMBER_ADD",
+        serde_json::json!({ "guild_id": gid.to_string(), "user_id": user.id.to_string() }),
+    );
 
     let g = sqlx::query("SELECT id, name, owner_id, icon_id FROM guilds WHERE id = ?")
         .bind(gid)
