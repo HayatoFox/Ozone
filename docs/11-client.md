@@ -1,0 +1,47 @@
+# 11 — Client natif (décision d'architecture)
+
+Objectif : un client **natif** (pas Electron), **performant**, **modulaire**, et capable d'**effets
+de décoration / thèmes** soignés à terme. Cf. [00-vision](00-vision-et-perimetre.md), [02-stack](02-stack-technique.md).
+
+## Décision : `Iced` pour l'UI, logique dans `ozone-core`
+
+| Critère | Pourquoi Iced |
+|---|---|
+| **Performant** | Rendu **GPU (wgpu)**, modèle retenu efficace. |
+| **Effets / thèmes** | Thèmes intégrés + styles par widget ; **widget `shader` wgpu** pour effets custom (dégradés, lueurs, animations) à terme. |
+| **Modulaire** | Architecture **Elm** (`Message`/`update`/`view`) → état décomposable, composants testables. |
+| **Cohérence** | **100% Rust** → `ozone-ui` et `ozone-core` réutilisent **directement `ozone-proto`** (DTOs partagés client/serveur). Pas de DSL ni de second langage. |
+
+Écartés : **egui** (plus faible sur le thème/effets soignés), **Slint** (DSL séparé → glue de types,
+pas de réutilisation directe de `ozone-proto`), **Tauri/Dioxus-webview** (rendu web, pas « natif fluide »).
+
+## Couches
+
+```
+ozone-proto   types partagés (DTOs, perms, snowflakes, JWT)  ← déjà fait
+ozone-core    logique client multiplateforme :
+              - InstanceRef (registre multi-instances)        ← fait
+              - ApiClient (REST typé, reqwest+rustls)          ← fait (S26, testé E2E vs serveur)
+              - GatewayClient (WS temps réel)                  ← à faire
+              - Store normalisé (guildes/salons/messages/présence) + cache  ← à faire
+              - Moteur vocal (signalisation + WebRTC client)   ← à faire (pair du SFU)
+ozone-ui      application Iced (vues, thèmes, navigation)      ← à faire
+```
+
+> **Crypto côté client** : `reqwest`/`rustls` (et la pile WebRTC) tirent `ring` — **acceptable côté
+> client**. La contrainte « zéro `ring` » ne concerne que le **serveur** (`ozone-api`, build AlmaLinux).
+
+## Contrat d'API
+
+L'API est servie **à la racine** (`/auth/...`, `/guilds/...`, `/channels/...` — cf.
+[04-api-rest](04-api-rest.md)). `InstanceRef::api_base()` renvoie la racine (`https://<hôte>`) ; un
+reverse-proxy peut exposer l'API sous un préfixe (l'inclure alors dans l'adresse de l'instance).
+
+## Prochaines étapes
+
+1. `ozone-core::GatewayClient` : connexion WS `/gateway`, `IDENTIFY`, réception/typage des
+   événements (`MESSAGE_CREATE`, `PRESENCE_UPDATE`, `VOICE_STATE_UPDATE`…), heartbeat, RESUME.
+2. Store normalisé + réconciliation REST↔Gateway, cache local (SQLite).
+3. `ozone-ui` (Iced) : écran de connexion à une instance (adresse + gate), switcher multi-instances,
+   liste guildes/salons, fil de messages, MP, présence, paramètres/thèmes.
+4. Moteur vocal client (signalisation via l'API → SFU `ozone-sfu`).

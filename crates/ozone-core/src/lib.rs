@@ -4,6 +4,8 @@
 //! le store normalisé, le cache SQLite et le moteur voix viennent ensuite
 //! (cf. `docs/01-architecture.md`, `docs/02-stack-technique.md`).
 
+pub mod client;
+pub use client::ApiClient;
 pub use ozone_proto as proto;
 
 use ozone_proto::Snowflake;
@@ -30,12 +32,16 @@ impl InstanceRef {
     }
 
     /// Base de l'API REST de l'instance (force HTTPS si aucun schéma n'est fourni).
+    ///
+    /// Le binaire tout-en-un sert l'API à la **racine** (cf. `docs/04-api-rest.md` : `/auth/...`,
+    /// `/guilds/...`). Un reverse-proxy peut l'exposer sous un préfixe ; dans ce cas, inclure le
+    /// préfixe dans `address`.
     pub fn api_base(&self) -> String {
         let a = self.address.trim().trim_end_matches('/');
         if a.starts_with("http://") || a.starts_with("https://") {
-            format!("{a}/api/v1")
+            a.to_string()
         } else {
-            format!("https://{a}/api/v1")
+            format!("https://{a}")
         }
     }
 
@@ -49,14 +55,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn api_base_forces_https() {
+    fn api_base_forces_https_and_keeps_root() {
+        // L'API est servie à la racine ; un schéma explicite est respecté.
         assert_eq!(
             InstanceRef::new("ozone.exemple.fr").api_base(),
-            "https://ozone.exemple.fr/api/v1"
+            "https://ozone.exemple.fr"
         );
         assert_eq!(
             InstanceRef::new("http://127.0.0.1:8080/").api_base(),
-            "http://127.0.0.1:8080/api/v1"
+            "http://127.0.0.1:8080"
         );
     }
 }
