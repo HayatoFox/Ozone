@@ -567,5 +567,17 @@ Tests : 5 unitaires du réducteur `update` (validation du formulaire, transition
 
 *Rappel d'intégration UI : lors du câblage de la persistance, n'écrire sur disque que `to_persisted()` (jamais `InstanceRef` complet).*
 
+## 36. S34 — UI multi-instances + porte d'accès
+
+Restructuration de l'UI (rail d'instances, flux d'ajout avec gate) au-dessus du cœur **déjà audité** (§30, §35). Écrit et audité par le mainteneur. **Aucune faille exploitable.** *(Validation visuelle = exécuter le binaire.)*
+
+| Vecteur examiné | Test | Posture |
+|---|---|---|
+| Isolation inter-instances (jeton/données) | `stale_guilds_result_is_ignored_after_switch` | Chaque `Instance` a **son propre `ApiClient`** (et donc son jeton) ; chaque `Task` clone l'`ApiClient` de l'instance ciblée. Les résultats async sont **étiquetés par index** et **ignorés s'ils ne concernent plus l'instance courante** ⇒ pas de fuite de données d'une instance sous une autre. |
+| Secrets en mémoire | `authenticated_marks_instance_and_opens_main` | Mot de passe **et** mot de passe d'instance **effacés** après authentification réussie. |
+| Gate contournée | `validates_auth_form_with_optional_gate` | Si l'instance est gardée, le formulaire **exige** le mot de passe d'instance ; le gate est de toute façon vérifié **côté serveur** (§35). |
+| Jetons au repos | (conception) | Les instances vivent **en mémoire** ; aucune persistance de jeton (la persistance éventuelle n'écrira que `to_persisted()`, sans jeton — §35). |
+| Exécution de contenu | (conception) | Rendu **texte brut** (cf. §34) — aucune exécution. |
+
 ---
-*Document vivant — revue effectuée pour S1 → S33 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), temps réel dans l'UI (subscription Gateway), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S34 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), temps réel dans l'UI (subscription Gateway), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
