@@ -86,6 +86,15 @@ pub async fn kick_member(
         .bind(target)
         .execute(&st.pool)
         .await?;
+    crate::routes_moderation::record_audit(
+        &st,
+        gid,
+        user.id.as_i64(),
+        Some(target),
+        "member_kick",
+        None,
+    )
+    .await;
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
@@ -200,6 +209,16 @@ pub async fn join_invite(
         return Err(AppError::forbidden("invitation épuisée"));
     }
     let gid = inv.guild_id.as_i64();
+
+    let banned = sqlx::query("SELECT 1 FROM guild_bans WHERE guild_id = ? AND user_id = ?")
+        .bind(gid)
+        .bind(user.id.as_i64())
+        .fetch_optional(&st.pool)
+        .await?
+        .is_some();
+    if banned {
+        return Err(AppError::forbidden("vous êtes banni de cette guilde"));
+    }
 
     sqlx::query("INSERT OR IGNORE INTO guild_members (guild_id, user_id, nick, joined_at) VALUES (?, ?, NULL, ?)")
         .bind(gid)

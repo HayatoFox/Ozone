@@ -236,13 +236,31 @@ pub async fn create_message(
     Json(req): Json<CreateMessage>,
 ) -> AppResult<Json<Message>> {
     let cid = parse_i64(&cid)?;
-    let (_gid, _owner, perms_acc) =
+    let (gid, _owner, perms_acc) =
         pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
     let content = req.content.trim_end();
     if content.is_empty() || content.chars().count() > 4000 {
         return Err(AppError::bad_request(
             "contenu de message invalide (1 à 4000 caractères)",
         ));
+    }
+    // Timeout : un membre en sourdine ne peut pas écrire dans un salon de guilde.
+    if gid != 0 {
+        let until: Option<i64> = sqlx::query(
+            "SELECT communication_disabled_until FROM guild_members WHERE guild_id = ? AND user_id = ?",
+        )
+        .bind(gid)
+        .bind(user.id.as_i64())
+        .fetch_optional(&st.pool)
+        .await?
+        .and_then(|r| r.get("communication_disabled_until"));
+        if let Some(until) = until {
+            if until > now_ms() {
+                return Err(AppError::forbidden(
+                    "vous êtes temporairement en sourdine (timeout)",
+                ));
+            }
+        }
     }
     // Slowmode (sauf MANAGE_MESSAGES / MANAGE_CHANNELS / BYPASS_SLOWMODE).
     if !(perms::has(perms_acc, perms::MANAGE_MESSAGES)

@@ -483,3 +483,41 @@ pub struct UpdateSound {
     pub volume: Option<f64>,
     pub emoji: Option<String>,
 }
+
+// ──────────────────────────── Modération ────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Ban {
+    pub user: User,
+    pub reason: Option<String>,
+    pub moderator_id: Snowflake,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CreateBan {
+    #[serde(default)]
+    pub reason: Option<String>,
+    /// Purge des messages de la cible sur les N dernières secondes (0 = aucune).
+    #[serde(default)]
+    pub delete_message_seconds: i64,
+}
+
+/// Mise à jour d'un membre : pseudo de serveur et/ou timeout.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateMember {
+    #[serde(default)]
+    pub nick: Option<String>,
+    /// Instant (ms epoch) de fin de timeout ; valeur passée = lever le timeout. `None` = inchangé.
+    #[serde(default)]
+    pub communication_disabled_until: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AuditLogEntry {
+    pub id: Snowflake,
+    pub user_id: Snowflake,
+    pub target_id: Option<Snowflake>,
+    pub action_type: String,
+    pub reason: Option<String>,
+    pub created_at: u64,
+}

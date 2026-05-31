@@ -16,6 +16,7 @@ pub mod routes_emojis;
 pub mod routes_guild;
 pub mod routes_instance;
 pub mod routes_messages;
+pub mod routes_moderation;
 pub mod routes_relationships;
 pub mod routes_roles;
 pub mod routes_soundboard;
@@ -23,7 +24,7 @@ pub mod routes_stickers;
 pub mod state;
 pub mod util;
 
-use axum::routing::{delete, get, patch, post, put};
+use axum::routing::{get, patch, post, put};
 use axum::Router;
 use config::Config;
 use state::AppState;
@@ -132,7 +133,17 @@ pub fn build_app(state: AppState) -> Router {
         .route("/guilds/:guild_id/members", get(routes_guild::list_members))
         .route(
             "/guilds/:guild_id/members/:user_id",
-            delete(routes_guild::kick_member),
+            patch(routes_moderation::update_member).delete(routes_guild::kick_member),
+        )
+        // Modération
+        .route(
+            "/guilds/:guild_id/bans/:user_id",
+            put(routes_moderation::ban_member).delete(routes_moderation::unban_member),
+        )
+        .route("/guilds/:guild_id/bans", get(routes_moderation::list_bans))
+        .route(
+            "/guilds/:guild_id/audit-logs",
+            get(routes_moderation::list_audit_logs),
         )
         .route(
             "/guilds/:guild_id/invites",

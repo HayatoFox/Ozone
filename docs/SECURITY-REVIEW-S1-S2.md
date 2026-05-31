@@ -128,5 +128,19 @@ Trois modules CRUD **écrits par des sous-agents en parallèle** (+ tests foncti
 
 Gardes : `require_expression_create` (CREATE **ou** MANAGE) et `require_expression_manage` (MANAGE **ou** auteur), `fetch` scopé à la guilde (pas d'IDOR inter-guildes), validation des noms/assets.
 
+## 10. S6b — Modération (bans, timeout, audit log)
+
+Cœur couplé par le mainteneur (enforcement dans l'envoi de message et la jonction). **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`security_s6b.rs`) | Résultat |
+|---|---|---|
+| Membre sans `BAN_MEMBERS` bannit | `moderation_requires_permissions` | `403` |
+| Membre sans `MODERATE_MEMBERS` met en sourdine | idem | `403` |
+| Membre sans `VIEW_AUDIT_LOG` lit l'audit | idem | `403` |
+| Bannir le **propriétaire** | `cannot_ban_owner_or_higher_role` | `403` |
+| Bannir un **rôle supérieur** (hiérarchie) | idem | `403` ; membre sous soi → `200` |
+
+Enforcement vérifié (`moderation.rs`) : un **banni** ne peut pas rejoindre (contrôle dans `join_invite`) ni écrire (plus membre) ; un membre **en timeout** ne peut pas envoyer de message (contrôle `communication_disabled_until` dans `create_message`) ; toutes les actions (ban/unban/kick/timeout) sont tracées dans le **journal d'audit**.
+
 ---
-*Document vivant — revue effectuée pour S1 → S6a ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S6b ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
