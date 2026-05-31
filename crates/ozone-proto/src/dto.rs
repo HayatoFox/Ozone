@@ -99,6 +99,12 @@ pub struct ChangeEmail {
     pub new_email: String,
 }
 
+/// Suppression de son propre compte (ré-authentification par le mot de passe).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DeleteAccount {
+    pub password: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RefreshRequest {
     pub refresh_token: String,

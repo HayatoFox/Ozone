@@ -71,8 +71,9 @@ cargo test -p ozone-api --test polls         # S21 — sondages
 cargo test -p ozone-api --test attachments   # S22 — pièces jointes
 cargo test -p ozone-api --test threads       # S23 — fils + héritage de permissions
 cargo test -p ozone-api --test account       # S24 — mot de passe & e-mail
-cargo test -p ozone-api                       # API : suite complète (110 tests)
-cargo test --workspace                        # API + SFU + proto (117 tests)
+cargo test -p ozone-api --test account_delete # S25 — suppression de compte
+cargo test -p ozone-api                       # API : suite complète (112 tests)
+cargo test --workspace                        # API + SFU + proto (119 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -453,5 +454,21 @@ Défenses (`routes_auth.rs`) :
 - **Révocation des sessions** au changement de mot de passe : `DELETE FROM sessions WHERE user_id = ?` invalide tous les refresh tokens (reconnexion requise) — coupe un attaquant éventuel.
 - **E-mail** : validé (`@`, ≤ 254), **unicité** vérifiée (hors soi) → `409` sinon. Nouveau mot de passe ≥ 8. Requêtes paramétrées.
 
+## 29. S25 — Suppression de compte (anonymisation)
+
+`DELETE /users/@me`. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`account_delete.rs`) | Résultat |
+|---|---|---|
+| Supprimer avec un mauvais mot de passe | `delete_account_anonymizes_and_keeps_messages` | `401` |
+| Après suppression : connexion impossible | idem | `401` |
+| Messages conservés mais **anonymisés** (auteur « deleted_… ») | idem | oui ; plus membre des guildes |
+| Supprimer en **possédant une guilde** | `cannot_delete_while_owning_guild` | `400` |
+
+Défenses (`routes_auth.rs`) :
+- **Ré-authentification** par mot de passe ; refus si l'utilisateur **possède encore une guilde** (anti-orphelinage — il doit la supprimer/transférer).
+- **Anonymisation transactionnelle** : suppression de toutes les données personnelles (sessions, relations, notes, états de lecture, réglages, rôles d'instance, états vocaux, mentions, destinataires MP, rôles de membre, adhésions, votes, réactions, pièces jointes en attente) ; la ligne `users` est **conservée** mais vidée (pseudo/e-mail → `deleted_<id>`, champs de profil → NULL, mot de passe rendu inutilisable) pour que **les messages restent attribués** à un « utilisateur supprimé » (jointure intacte).
+- **Connexion bloquée** : `login` rejette un compte `deleted` (et le hash inutilisable échoue de toute façon). Cohérent avec la fenêtre de jeton d'accès de 10 min (sessions révoquées).
+
 ---
-*Document vivant — revue effectuée pour S1 → S24 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, suppression de compte (stratégie « utilisateur supprimé » pour les messages), rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S25 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

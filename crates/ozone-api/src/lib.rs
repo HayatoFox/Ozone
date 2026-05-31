@@ -81,7 +81,9 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/token/refresh", post(routes_auth::refresh))
         .route(
             "/users/@me",
-            get(routes_auth::me).patch(routes_users::update_profile),
+            get(routes_auth::me)
+                .patch(routes_users::update_profile)
+                .delete(routes_auth::delete_account),
         )
         .route(
             "/users/@me/settings",

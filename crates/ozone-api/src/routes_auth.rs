@@ -9,8 +9,8 @@ use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
 use ozone_proto::dto::{
-    ChangeEmail, ChangePassword, LoginRequest, RefreshRequest, RegisterRequest, RegistrationPolicy,
-    TokenPair, User,
+    ChangeEmail, ChangePassword, DeleteAccount, LoginRequest, RefreshRequest, RegisterRequest,
+    RegistrationPolicy, TokenPair, User,
 };
 use ozone_proto::Snowflake;
 use sqlx::Row;
@@ -175,7 +175,7 @@ pub async fn login(
     check_gate(&st, &req.gate_token)?;
     let login = req.login.trim();
     let row = sqlx::query(
-        "SELECT id, password_hash, suspended FROM users WHERE username = ? OR email = ?",
+        "SELECT id, password_hash, suspended, deleted FROM users WHERE username = ? OR email = ?",
     )
     .bind(login.to_lowercase())
     .bind(login.to_lowercase())
@@ -184,6 +184,10 @@ pub async fn login(
     let Some(row) = row else {
         return Err(AppError::unauthorized("identifiants invalides"));
     };
+    // Un compte supprimé n'existe plus (on ne révèle pas la suppression).
+    if row.get::<i64, _>("deleted") != 0 {
+        return Err(AppError::unauthorized("identifiants invalides"));
+    }
     let hash: String = row.get("password_hash");
     if !crypto::verify_password(&req.password, &hash) {
         return Err(AppError::unauthorized("identifiants invalides"));
@@ -330,4 +334,73 @@ pub async fn change_email(
         avatar_id: row.get("avatar_id"),
         email: Some(row.get("email")),
     }))
+}
+
+/// `DELETE /users/@me` — supprime (anonymise) son propre compte (ré-auth requise).
+/// La ligne `users` est conservée mais vidée de toute donnée personnelle : les messages publiés
+/// restent attribués à un « utilisateur supprimé ». Impossible si l'on possède encore des guildes.
+pub async fn delete_account(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<DeleteAccount>,
+) -> AppResult<Json<serde_json::Value>> {
+    let uid = user.id.as_i64();
+    let hash: String = sqlx::query("SELECT password_hash FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?
+        .get("password_hash");
+    if !crypto::verify_password(&req.password, &hash) {
+        return Err(AppError::unauthorized("mot de passe invalide"));
+    }
+    let owned: i64 = sqlx::query("SELECT COUNT(*) AS c FROM guilds WHERE owner_id = ?")
+        .bind(uid)
+        .fetch_one(&st.pool)
+        .await?
+        .get("c");
+    if owned > 0 {
+        return Err(AppError::bad_request(
+            "supprimez ou transférez vos guildes avant de supprimer votre compte",
+        ));
+    }
+
+    let mut tx = st.pool.begin().await?;
+    for sql in [
+        "DELETE FROM sessions WHERE user_id = ?",
+        "DELETE FROM relationships WHERE user_id = ? OR target_id = ?",
+        "DELETE FROM user_notes WHERE user_id = ? OR target_id = ?",
+        "DELETE FROM read_states WHERE user_id = ?",
+        "DELETE FROM notification_settings WHERE user_id = ?",
+        "DELETE FROM instance_roles WHERE user_id = ?",
+        "DELETE FROM voice_states WHERE user_id = ?",
+        "DELETE FROM mentions WHERE user_id = ?",
+        "DELETE FROM dm_recipients WHERE user_id = ?",
+        "DELETE FROM member_roles WHERE user_id = ?",
+        "DELETE FROM guild_members WHERE user_id = ?",
+        "DELETE FROM user_settings WHERE user_id = ?",
+        "DELETE FROM poll_votes WHERE user_id = ?",
+        "DELETE FROM reactions WHERE user_id = ?",
+        "DELETE FROM attachments WHERE uploader_id = ? AND message_id IS NULL",
+    ] {
+        let binds = sql.matches('?').count();
+        let mut q = sqlx::query(sql);
+        for _ in 0..binds {
+            q = q.bind(uid);
+        }
+        q.execute(&mut *tx).await?;
+    }
+    // Anonymise la ligne (conservée pour l'attribution des messages). Mot de passe rendu inutilisable.
+    sqlx::query(
+        "UPDATE users SET username = ?, email = ?, display_name = NULL, avatar_id = NULL, \
+         bio = NULL, pronouns = NULL, banner_id = NULL, accent_color = NULL, \
+         password_hash = 'DELETED', deleted = 1 WHERE id = ?",
+    )
+    .bind(format!("deleted_{uid}"))
+    .bind(format!("deleted_{uid}@deleted.invalid"))
+    .bind(uid)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
