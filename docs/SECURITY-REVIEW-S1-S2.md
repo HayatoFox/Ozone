@@ -470,5 +470,23 @@ Défenses (`routes_auth.rs`) :
 - **Anonymisation transactionnelle** : suppression de toutes les données personnelles (sessions, relations, notes, états de lecture, réglages, rôles d'instance, états vocaux, mentions, destinataires MP, rôles de membre, adhésions, votes, réactions, pièces jointes en attente) ; la ligne `users` est **conservée** mais vidée (pseudo/e-mail → `deleted_<id>`, champs de profil → NULL, mot de passe rendu inutilisable) pour que **les messages restent attribués** à un « utilisateur supprimé » (jointure intacte).
 - **Connexion bloquée** : `login` rejette un compte `deleted` (et le hash inutilisable échoue de toute façon). Cohérent avec la fenêtre de jeton d'accès de 10 min (sessions révoquées).
 
+## 30. S26–S28 — Cœur client (`ozone-core` : `ApiClient`, Gateway, Store)
+
+Première frontière de confiance **côté client**. Contrairement au serveur, `ring` y est **accepté** (`reqwest`/`rustls`, future pile WebRTC) — la contrainte « zéro `ring` » ne vise que `ozone-api`. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur examiné | Couche | Posture |
+|---|---|---|
+| Identifiants/jetons en clair sur le réseau | `ApiClient` / Gateway | `InstanceRef::api_base()` **force `https://`** si aucun schéma fourni ; la Gateway dérive `wss://` de `https://` (`ws_url`). Pas de transport en clair par défaut. |
+| Trame Gateway malformée → panique/DoS | `store::apply` | `serde_json::from_value` en échec ⇒ **`false`** (jamais de `unwrap`/panique) ; `id_field` parse via `.ok()`. Trames hors-`DISPATCH`/inconnues ignorées. |
+| Ré-dérivation des permissions côté client | `store` | **Volontairement absente** : le store fait confiance au filtrage **serveur** (`should_deliver`) — une connexion ne reçoit que les événements auxquels elle a droit. Refaire le calcul de droits côté client serait à la fois faux (le serveur est l'autorité) et une surface de contournement. |
+| XSS via contenu de message | `store` | Aucun rendu dans cette couche : le contenu est stocké en **chaînes inertes**. La défense XSS relève de l'UI (à venir) ; côté serveur, les téléversements sont déjà `nosniff` + CSP (cf. §26/F8). |
+| `unsafe` / SQL / FS / exécution | `store` | Aucun : machine à états purement en mémoire, sans `unsafe`, sans I/O. |
+
+**Point suivi (R8, faible) — croissance mémoire non bornée côté client.** `apply(MESSAGE_CREATE)` empile sans limite dans `messages` (de même `guilds`/`channels`/`presences` ne sont jamais purgés). Un serveur compromis ou un flot d'événements pourrait faire croître la mémoire du client (DoS **côté client**). Acceptable sous le modèle de confiance actuel (l'instance est le serveur **choisi/auto-hébergé** par l'utilisateur) et **renvoyé à la couche cache SQLite** (prochaine tranche), qui portera la politique d'éviction/rétention. Aucune donnée d'autrui n'est exposée par ce point.
+
+| Risque | Sévérité | État |
+|---|---|---|
+| R8 — croissance mémoire non bornée du `Store` client | Faible | Suivi → couche cache SQLite (éviction) |
+
 ---
-*Document vivant — revue effectuée pour S1 → S25 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S28 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, éviction du cache client (R8), tests de charge, et consommation transactionnelle des invitations (R5).*
