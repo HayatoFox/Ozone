@@ -85,6 +85,20 @@ pub struct GateResponse {
     pub gate_token: String,
 }
 
+/// Changement de mot de passe (ré-authentification par le mot de passe actuel).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChangePassword {
+    pub current_password: String,
+    pub new_password: String,
+}
+
+/// Changement d'e-mail (ré-authentification par le mot de passe).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ChangeEmail {
+    pub password: String,
+    pub new_email: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RefreshRequest {
     pub refresh_token: String,

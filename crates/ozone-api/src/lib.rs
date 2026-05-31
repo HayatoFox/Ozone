@@ -88,6 +88,8 @@ pub fn build_app(state: AppState) -> Router {
             get(routes_users::get_settings).put(routes_users::put_settings),
         )
         .route("/users/@me/presence", put(routes_presence::set_presence))
+        .route("/users/@me/password", patch(routes_auth::change_password))
+        .route("/users/@me/email", patch(routes_auth::change_email))
         .route("/users/:user_id/profile", get(routes_users::get_profile))
         // Relations (amis / blocages / notes)
         .route(

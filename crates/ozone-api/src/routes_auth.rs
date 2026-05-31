@@ -9,7 +9,8 @@ use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
 use ozone_proto::dto::{
-    LoginRequest, RefreshRequest, RegisterRequest, RegistrationPolicy, TokenPair, User,
+    ChangeEmail, ChangePassword, LoginRequest, RefreshRequest, RegisterRequest, RegistrationPolicy,
+    TokenPair, User,
 };
 use ozone_proto::Snowflake;
 use sqlx::Row;
@@ -239,6 +240,89 @@ pub async fn me(State(st): State<AppState>, user: AuthUser) -> AppResult<Json<Us
             .fetch_optional(&st.pool)
             .await?
             .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
+    Ok(Json(User {
+        id: Snowflake::from_i64(row.get::<i64, _>("id")),
+        username: row.get("username"),
+        display_name: row.get("display_name"),
+        avatar_id: row.get("avatar_id"),
+        email: Some(row.get("email")),
+    }))
+}
+
+/// `PATCH /users/@me/password` — change le mot de passe (ré-auth requise) et révoque les sessions.
+pub async fn change_password(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<ChangePassword>,
+) -> AppResult<Json<serde_json::Value>> {
+    let uid = user.id.as_i64();
+    let hash: String = sqlx::query("SELECT password_hash FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?
+        .get("password_hash");
+    if !crypto::verify_password(&req.current_password, &hash) {
+        return Err(AppError::unauthorized("mot de passe actuel invalide"));
+    }
+    if req.new_password.len() < 8 {
+        return Err(AppError::bad_request(
+            "nouveau mot de passe trop court (8 caractères minimum)",
+        ));
+    }
+    let new_hash = crypto::hash_password(&req.new_password).map_err(AppError::internal)?;
+    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+        .bind(&new_hash)
+        .bind(uid)
+        .execute(&st.pool)
+        .await?;
+    // Sécurité : révoque toutes les sessions (refresh tokens) — reconnexion requise partout.
+    sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+        .bind(uid)
+        .execute(&st.pool)
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `PATCH /users/@me/email` — change l'e-mail (ré-auth requise, unicité vérifiée).
+pub async fn change_email(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<ChangeEmail>,
+) -> AppResult<Json<User>> {
+    let uid = user.id.as_i64();
+    let hash: String = sqlx::query("SELECT password_hash FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?
+        .get("password_hash");
+    if !crypto::verify_password(&req.password, &hash) {
+        return Err(AppError::unauthorized("mot de passe invalide"));
+    }
+    let email = req.new_email.trim().to_lowercase();
+    if !email.contains('@') || email.len() > 254 {
+        return Err(AppError::bad_request("e-mail invalide"));
+    }
+    let taken = sqlx::query("SELECT 1 FROM users WHERE email = ? AND id <> ?")
+        .bind(&email)
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await?
+        .is_some();
+    if taken {
+        return Err(AppError::conflict("e-mail déjà utilisé"));
+    }
+    sqlx::query("UPDATE users SET email = ? WHERE id = ?")
+        .bind(&email)
+        .bind(uid)
+        .execute(&st.pool)
+        .await?;
+    let row =
+        sqlx::query("SELECT id, username, display_name, avatar_id, email FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_one(&st.pool)
+            .await?;
     Ok(Json(User {
         id: Snowflake::from_i64(row.get::<i64, _>("id")),
         username: row.get("username"),

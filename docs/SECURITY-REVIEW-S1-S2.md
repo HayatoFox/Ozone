@@ -70,8 +70,9 @@ cargo test -p ozone-api --test discovery     # S20 — découverte de guildes pu
 cargo test -p ozone-api --test polls         # S21 — sondages
 cargo test -p ozone-api --test attachments   # S22 — pièces jointes
 cargo test -p ozone-api --test threads       # S23 — fils + héritage de permissions
-cargo test -p ozone-api                       # API : suite complète (108 tests)
-cargo test --workspace                        # API + SFU + proto (115 tests)
+cargo test -p ozone-api --test account       # S24 — mot de passe & e-mail
+cargo test -p ozone-api                       # API : suite complète (110 tests)
+cargo test --workspace                        # API + SFU + proto (117 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -436,5 +437,21 @@ Défenses :
 - **Héritage des surcharges** (`permissions::channel_permissions`) : pour un fil (type 11/12), les permissions effectives sont calculées contre **les surcharges du salon parent** — un fil sous un salon privé reste privé partout (REST **et** routage Gateway, qui utilisent la même fonction). Changement **rétro-compatible** : pour un salon normal, le comportement est inchangé (vérifié par toute la suite préexistante).
 - **Création** gardée par `VIEW_CHANNEL | CREATE_PUBLIC_THREADS` sur le **parent**, restreinte aux salons texte/annonces d'une guilde ; nom validé (1–100). Liste filtrée par visibilité effective de chaque fil.
 
+## 28. S24 — Gestion de compte (mot de passe & e-mail)
+
+`PATCH /users/@me/password` et `PATCH /users/@me/email`. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`account.rs`) | Résultat |
+|---|---|---|
+| Changer le mot de passe avec un **mauvais** mot de passe actuel | `change_password_revokes_sessions` | `401` |
+| Nouveau mot de passe trop court | idem | `400` |
+| Après changement : **sessions révoquées** (ancien refresh) | idem | `401` ; ancien mot de passe refusé à la connexion |
+| Changer l'e-mail sans jeton / mauvais mot de passe / e-mail déjà pris | `change_email_flow` | `401` / `401` / `409` |
+
+Défenses (`routes_auth.rs`) :
+- **Ré-authentification obligatoire** : les deux opérations exigent le **mot de passe actuel** (vérifié Argon2id) — un jeton volé ne suffit pas à détourner le compte.
+- **Révocation des sessions** au changement de mot de passe : `DELETE FROM sessions WHERE user_id = ?` invalide tous les refresh tokens (reconnexion requise) — coupe un attaquant éventuel.
+- **E-mail** : validé (`@`, ≤ 254), **unicité** vérifiée (hors soi) → `409` sinon. Nouveau mot de passe ≥ 8. Requêtes paramétrées.
+
 ---
-*Document vivant — revue effectuée pour S1 → S23 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S24 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, suppression de compte (stratégie « utilisateur supprimé » pour les messages), rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
