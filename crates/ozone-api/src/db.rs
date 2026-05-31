@@ -121,6 +121,7 @@ pub async fn bootstrap_state(cfg: &Config) -> anyhow::Result<AppState> {
         instance: Arc::new(runtime),
         hub,
         presence: Arc::new(crate::presence::Registry::new()),
+        sessions: Arc::new(crate::gateway_session::SessionRegistry::new()),
         voice_secret: Arc::new(voice_secret),
         upload_dir: Arc::new(upload_dir),
     })

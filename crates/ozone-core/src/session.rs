@@ -138,6 +138,48 @@ impl Session {
         self.gateway.is_some()
     }
 
+    /// Dernière séquence Gateway consommée (`0` si pas de connexion). Utile pour l'UI / le RESUME.
+    pub fn gateway_seq(&self) -> u64 {
+        self.gateway.as_ref().map(|g| g.last_seq()).unwrap_or(0)
+    }
+
+    /// Reprend la Gateway après une coupure : tente un **RESUME** (rejeu des événements manqués
+    /// depuis le dernier `seq`) ; si le serveur refuse (session expirée/tampon dépassé), bascule
+    /// sur une connexion complète (`IDENTIFY`). Renvoie `true` si le RESUME a réussi.
+    pub async fn reconnect(&mut self) -> Result<bool> {
+        let access = self
+            .access
+            .clone()
+            .ok_or_else(|| anyhow!("non authentifié"))?;
+        // Récupère (et libère le borrow de) l'id de session + dernier seq de la connexion en cours.
+        let prev = self
+            .gateway
+            .as_ref()
+            .and_then(|c| c.session_id().map(|s| (s.to_string(), c.last_seq())));
+        if let Some((session_id, seq)) = prev {
+            match gateway::connect_resume(&self.instance.api_base(), &access, &session_id, seq)
+                .await?
+            {
+                gateway::Resumed::Ok(conn) => {
+                    self.ready = Some(conn.ready.clone());
+                    self.gateway = Some(conn);
+                    return Ok(true);
+                }
+                gateway::Resumed::Invalid => {} // → reconnexion complète ci-dessous
+            }
+        }
+        self.connect_gateway().await?;
+        Ok(false)
+    }
+
+    /// Coupe le socket Gateway courant (perte réseau simulée / gestion d'une connexion morte).
+    /// La session reste résumable via [`Session::reconnect`].
+    pub fn abort_gateway(&self) {
+        if let Some(g) = self.gateway.as_ref() {
+            g.abort();
+        }
+    }
+
     /// Attend le prochain événement Gateway, l'applique au `Store` **et** au cache (best-effort).
     /// Renvoie `None` si aucune Gateway n'est connectée ou si le flux est fermé.
     pub async fn poll_event(&mut self) -> Option<EventOutcome> {

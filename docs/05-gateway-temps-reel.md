@@ -55,6 +55,15 @@ RESUME { token, session_id, seq: dernier_s_reçu }
 - Si la session a expiré → `INVALID_SESSION { resumable: false }` → le client refait `IDENTIFY` à froid.
 - **Buffer de resume** : chaque session conserve une fenêtre glissante (ex. dernières 5 min / N événements) avec leurs `s`. C'est ce qui évite de tout recharger à chaque micro-coupure réseau (essentiel en mobilité).
 
+> **✅ Implémenté (S31).** Chaque session = un **acteur** (`gateway_session.rs`) qui possède son
+> abonnement au bus, filtre via `should_deliver`, numérote (`s`) et **bufferise** (fenêtre de
+> `BUFFER_CAP = 512` événements). L'acteur **survit à la coupure** pendant une **grâce de 60 s**
+> (la présence ne « clignote » donc pas sur une micro-coupure). Un RESUME n'est accepté que si le
+> tampon **couvre encore** tout ce qui suit le `seq` du client (sinon `INVALID_SESSION` → IDENTIFY
+> à froid : **jamais de trou silencieux**). **Isolation** : une session n'est reprise que par **le
+> même utilisateur** (le secret du `session_id` n'est pas la défense). Côté client, `last_seq`
+> n'avance qu'à la **consommation** d'un événement → pas de perte d'un événement reçu mais non traité.
+
 ## 5. Intents (réduction de volume)
 
 À l'`IDENTIFY`, le client/bot déclare les **intents** (familles d'événements souhaitées) → le serveur ne pousse que celles-ci. Exemples : `GUILDS`, `GUILD_MEMBERS`, `GUILD_MESSAGES`, `MESSAGE_CONTENT`, `GUILD_PRESENCES`, `GUILD_VOICE_STATES`, `DIRECT_MESSAGES`, `GUILD_MODERATION`, `AUTO_MODERATION`. Le client Ozone officiel demande tout ; les bots tiers restreignent (perf + vie privée). Certains intents sont « privilégiés » (presence, membres, contenu) et requièrent une autorisation.

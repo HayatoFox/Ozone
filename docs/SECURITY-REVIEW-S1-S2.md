@@ -518,5 +518,25 @@ Colle de haut niveau au-dessus de couches **déjà auditées** (`ApiClient`/Gate
 
 *Suivi (faible, futur) : stockage chiffré des jetons au repos côté registre d'instances ; rotation proactive via `refresh_session` avant expiration.*
 
+## 33. S31 — RESUME Gateway (reprise sans perte)
+
+Reconnexion après coupure **sans re-IDENTIFY ni perte d'événement** : chaque session est un **acteur** (`gateway_session.rs`) qui possède son abonnement au bus, filtre via `should_deliver`, numérote et **bufferise** les événements, et **survit à la coupure du socket** pendant une fenêtre de grâce. Refonte du cœur Gateway — **non-régressive** (les 112 tests `ozone-api` passent toujours). Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé / examiné | Test | Résultat / défense |
+|---|---|---|
+| Reprise par **un autre utilisateur** (vol de session ⇒ fuite d'événements) | `resume_rejects_another_users_session` | `INVALID_SESSION` : `resume_session` vérifie `meta.user_id == uid`. **La sécurité ne repose pas sur le secret du `session_id`** (snowflake) mais sur ce contrôle d'appartenance. |
+| RESUME d'une **session inconnue/expirée** | `resume_unknown_session_is_refused` | `INVALID_SESSION` ⇒ le client repart sur un IDENTIFY propre. |
+| RESUME sans/avec mauvais **jeton** | (même chemin `verify_token`) | `INVALID_SESSION` : RESUME exige un jeton d'accès valide, comme IDENTIFY. |
+| **Perte silencieuse** d'un événement manqué | `session_resume_replays_events_missed_during_outage` | L'acteur bufferise pendant la coupure ; le rejeu renvoie tout `s > seq`. Si le tampon a évincé un événement nécessaire (`after_seq < evicted_through`) ⇒ refus (`INVALID_SESSION`), **jamais de trou masqué**. |
+| Événement reçu mais **non traité** au moment de la coupure | (conception client) | `last_seq` n'avance qu'à la **consommation** (`next_event`), pas à la réception ⇒ un RESUME reprend exactement après le dernier événement réellement appliqué. |
+| Croissance mémoire (DoS) | — | Tampon **borné** `BUFFER_CAP = 512`/session (éviction des plus anciens). |
+| Fuite via permissions changées | — | `should_deliver` est évalué **à la livraison** : le rejeu ne renvoie que des trames déjà autorisées au moment du buffer ; les événements postérieurs à une perte de droit sont filtrés normalement (livraison continue). Pas de nouvelle fuite. |
+
+**Présence durcie au passage** : la présence est désormais liée au **cycle de vie de l'acteur** (et non du socket brut) ⇒ une micro-coupure suivie d'un RESUME **ne fait plus clignoter** le statut en/hors ligne ; le passage hors ligne + nettoyage vocal n'a lieu qu'à l'expiration de la grâce (60 s).
+
+| Risque | Sévérité | État |
+|---|---|---|
+| R9 — accumulation d'acteurs de session pendant la grâce (connexions/déconnexions rapides) | Faible | Suivi → plafond de sessions par utilisateur + rate-limit IDENTIFY (futur) |
+
 ---
-*Document vivant — revue effectuée pour S1 → S30 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons (registre d'instances), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S31 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons (registre d'instances), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

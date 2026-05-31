@@ -8,6 +8,7 @@ pub mod db;
 pub mod error;
 pub mod extract;
 pub mod gateway;
+pub mod gateway_session;
 pub mod permissions;
 pub mod presence;
 pub mod routes_attachments;

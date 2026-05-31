@@ -22,7 +22,7 @@ ozone-proto   types partagés (DTOs, perms, snowflakes, JWT)  ← déjà fait
 ozone-core    logique client multiplateforme :
               - InstanceRef (registre multi-instances)        ← fait
               - ApiClient (REST typé, reqwest+rustls)          ← fait (S26, testé E2E vs serveur)
-              - GatewayClient (WS temps réel)                  ← fait (S27, testé E2E : reçoit un MESSAGE_CREATE live)
+              - GatewayClient (WS temps réel + RESUME)         ← fait (S27/S31 ; reprise sans perte après coupure, testé E2E)
               - Store normalisé (guildes/salons/messages/présence)  ← fait (S28 ; applique les events Gateway, testé)
               - Cache local (SQLite + rétention bornée)         ← fait (S29 ; persiste/réhydrate, plafonds mémoire+disque, testé)
               - Session (orchestrateur : auth+bootstrap+temps réel+cache)  ← fait (S30 ; API haut niveau pour l'UI, testé E2E)
@@ -45,5 +45,5 @@ reverse-proxy peut exposer l'API sous un préfixe (l'inclure alors dans l'adress
    liste guildes/salons, fil de messages (alimenté par le `Store`/cache), MP, présence, paramètres/thèmes.
    *(Nécessite un environnement graphique pour itérer/valider visuellement.)*
 2. Moteur vocal client (signalisation via l'API → SFU `ozone-sfu`).
-3. `GatewayClient` : RESUME après coupure (reprise sans re-IDENTIFY).
-4. Réconciliation cache↔serveur au démarrage (hydrater depuis le cache, puis rafraîchir via REST/Gateway).
+3. Reconnexion automatique : boucle qui appelle `Session::reconnect()` quand le flux se ferme
+   (back-off), avec rafraîchissement du jeton (`refresh_session`) si nécessaire.

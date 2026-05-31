@@ -2,16 +2,19 @@
 //! Cf. docs/05-gateway-temps-reel.md.
 
 use crate::crypto;
+use crate::gateway_session::{create_session, resume_session, SessionConn};
 use crate::permissions as pg;
 use crate::state::{AppState, EventScope};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::State;
 use axum::response::Response;
+use futures_util::stream::{SplitSink, SplitStream};
 use futures_util::{SinkExt, StreamExt};
 use ozone_proto::gateway::{opcode, GatewayFrame};
 use ozone_proto::{perms, Snowflake};
 use serde_json::json;
 use sqlx::Row;
+use tokio::sync::mpsc;
 
 pub async fn ws_handler(ws: WebSocketUpgrade, State(st): State<AppState>) -> Response {
     ws.on_upgrade(move |socket| handle_socket(socket, st))
@@ -19,81 +22,157 @@ pub async fn ws_handler(ws: WebSocketUpgrade, State(st): State<AppState>) -> Res
 
 async fn handle_socket(socket: WebSocket, st: AppState) {
     let (mut tx, mut rx_ws) = socket.split();
-    let mut hub_rx = st.hub.subscribe();
-    let mut seq: u64 = 0;
-    let mut authed: Option<Snowflake> = None;
 
     let hello = GatewayFrame::with_data(opcode::HELLO, json!({ "heartbeat_interval": 41250 }));
     if send_frame(&mut tx, &hello).await.is_err() {
         return;
     }
 
+    // Attente du handshake : IDENTIFY (nouvelle session) ou RESUME (reprise). On boucle pour
+    // tolérer un heartbeat ou un essai refusé avant l'établissement de la session.
     loop {
-        tokio::select! {
-            incoming = rx_ws.next() => {
-                match incoming {
-                    Some(Ok(Message::Text(txt))) => {
-                        let Ok(frame) = serde_json::from_str::<GatewayFrame>(&txt) else { continue };
-                        match frame.op {
-                            opcode::IDENTIFY => {
-                                let token = frame.d.as_ref()
-                                    .and_then(|d| d.get("token"))
-                                    .and_then(|t| t.as_str())
-                                    .unwrap_or_default();
-                                match crypto::jwt_verify(&st.jwt_secret, token, "access")
-                                    .and_then(|c| c.sub.parse::<u64>().ok())
-                                {
-                                    Some(uid) => {
-                                        let uid = Snowflake::new(uid);
-                                        authed = Some(uid);
-                                        seq += 1;
-                                        let ready = build_ready(&st, uid).await;
-                                        let f = GatewayFrame::dispatch("READY", ready, seq);
-                                        if send_frame(&mut tx, &f).await.is_err() { break; }
-                                        // Présence : 1ère connexion → en ligne, diffusé aux guildes partagées.
-                                        if st.presence.connect(uid.as_i64()) {
-                                            broadcast_presence(&st, uid.as_i64()).await;
-                                        }
-                                    }
-                                    None => {
-                                        let f = GatewayFrame::with_data(opcode::INVALID_SESSION, json!(false));
-                                        let _ = send_frame(&mut tx, &f).await;
-                                    }
-                                }
-                            }
-                            opcode::HEARTBEAT => {
-                                let f = GatewayFrame::new(opcode::HEARTBEAT_ACK);
-                                if send_frame(&mut tx, &f).await.is_err() { break; }
-                            }
-                            _ => {}
+        let txt = match rx_ws.next().await {
+            Some(Ok(Message::Text(t))) => t,
+            Some(Ok(Message::Close(_))) | None => return,
+            Some(Ok(_)) => continue, // ping/pong/binaire avant auth
+            Some(Err(_)) => return,
+        };
+        let Ok(frame) = serde_json::from_str::<GatewayFrame>(&txt) else {
+            continue;
+        };
+
+        match frame.op {
+            opcode::IDENTIFY => {
+                let Some(uid) = verify_token(&st, &frame) else {
+                    let _ = send_frame(&mut tx, &invalid_session()).await;
+                    continue;
+                };
+                // Nouvelle session résumable (l'acteur gère présence + tampon de rejeu).
+                let (session_id, conn) = create_session(&st, uid.as_i64());
+                let Some((mut sink_rx, current_seq)) = conn.attach(0).await else {
+                    conn.close();
+                    return;
+                };
+                let ready = build_ready(&st, uid, &session_id).await;
+                let f = GatewayFrame::dispatch("READY", ready, current_seq);
+                if send_frame(&mut tx, &f).await.is_err() {
+                    conn.close();
+                    return;
+                }
+                pump(&mut tx, &mut rx_ws, &conn, &mut sink_rx).await;
+                return;
+            }
+            opcode::RESUME => {
+                let Some(uid) = verify_token(&st, &frame) else {
+                    let _ = send_frame(&mut tx, &invalid_session()).await;
+                    continue;
+                };
+                let d = frame.d.clone().unwrap_or_default();
+                let session_id = d
+                    .get("session_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or_default()
+                    .to_string();
+                let after_seq = d.get("seq").and_then(|v| v.as_u64()).unwrap_or(0);
+
+                // Session inconnue/expirée, ou appartenant à un autre utilisateur ⇒ refus.
+                let Some(conn) = resume_session(&st, &session_id, uid.as_i64()) else {
+                    let _ = send_frame(&mut tx, &invalid_session()).await;
+                    continue;
+                };
+                match conn.attach(after_seq).await {
+                    Some((mut sink_rx, current_seq)) => {
+                        let f = GatewayFrame::dispatch(
+                            "RESUMED",
+                            json!({ "session_id": session_id }),
+                            current_seq,
+                        );
+                        if send_frame(&mut tx, &f).await.is_err() {
+                            conn.close();
+                            return;
                         }
+                        pump(&mut tx, &mut rx_ws, &conn, &mut sink_rx).await;
+                        return;
                     }
-                    Some(Ok(Message::Close(_))) | None => break,
-                    Some(Err(_)) => break,
-                    _ => {}
+                    // Tampon dépassé (trop d'événements manqués) ⇒ le client doit re-IDENTIFY.
+                    None => {
+                        let _ = send_frame(&mut tx, &invalid_session()).await;
+                        continue;
+                    }
                 }
             }
-            ev = hub_rx.recv() => {
-                if let Ok(event) = ev {
-                    if let Some(uid) = authed {
-                        // Routage pub/sub : on ne pousse l'événement que si l'utilisateur y a droit.
-                        if should_deliver(&st, uid.as_i64(), &event.scope).await {
-                            seq += 1;
-                            let f = GatewayFrame::dispatch(event.t, event.d, seq);
-                            if send_frame(&mut tx, &f).await.is_err() { break; }
-                        }
-                    }
+            opcode::HEARTBEAT => {
+                if send_frame(&mut tx, &GatewayFrame::new(opcode::HEARTBEAT_ACK))
+                    .await
+                    .is_err()
+                {
+                    return;
                 }
             }
+            _ => {}
         }
     }
+}
 
-    // Déconnexion : si c'était la dernière session de l'utilisateur, il passe hors ligne
-    // et son état vocal éventuel est libéré.
-    if let Some(uid) = authed {
-        if st.presence.disconnect(uid.as_i64()) {
-            broadcast_presence(&st, uid.as_i64()).await;
-            crate::routes_voice::disconnect_all_voice(&st, uid.as_i64()).await;
+fn invalid_session() -> GatewayFrame {
+    GatewayFrame::with_data(opcode::INVALID_SESSION, json!(false))
+}
+
+/// Extrait et vérifie le jeton d'accès d'une trame IDENTIFY/RESUME ⇒ l'identifiant utilisateur.
+fn verify_token(st: &AppState, frame: &GatewayFrame) -> Option<Snowflake> {
+    let token = frame
+        .d
+        .as_ref()
+        .and_then(|d| d.get("token"))
+        .and_then(|t| t.as_str())
+        .unwrap_or_default();
+    crypto::jwt_verify(&st.jwt_secret, token, "access")
+        .and_then(|c| c.sub.parse::<u64>().ok())
+        .map(Snowflake::new)
+}
+
+/// Boucle « socket attaché » : pousse les événements de l'acteur vers le WS et répond aux
+/// heartbeats. À la sortie : `detach()` (coupure réseau, session résumable) ou `close()` (Close).
+async fn pump(
+    tx: &mut SplitSink<WebSocket, Message>,
+    rx_ws: &mut SplitStream<WebSocket>,
+    conn: &SessionConn,
+    sink_rx: &mut mpsc::UnboundedReceiver<GatewayFrame>,
+) {
+    loop {
+        tokio::select! {
+            out = sink_rx.recv() => match out {
+                Some(frame) => {
+                    if send_frame(tx, &frame).await.is_err() {
+                        conn.detach();
+                        return;
+                    }
+                }
+                None => return, // l'acteur s'est arrêté (grâce expirée)
+            },
+            inc = rx_ws.next() => match inc {
+                Some(Ok(Message::Text(txt))) => {
+                    if let Ok(f) = serde_json::from_str::<GatewayFrame>(&txt) {
+                        if f.op == opcode::HEARTBEAT
+                            && send_frame(tx, &GatewayFrame::new(opcode::HEARTBEAT_ACK))
+                                .await
+                                .is_err()
+                        {
+                            conn.detach();
+                            return;
+                        }
+                    }
+                }
+                Some(Ok(Message::Close(_))) => {
+                    conn.close();
+                    return;
+                }
+                None | Some(Err(_)) => {
+                    conn.detach();
+                    return;
+                }
+                _ => {}
+            },
         }
     }
 }
@@ -126,7 +205,7 @@ where
     tx.send(Message::Text(txt)).await.map_err(|_| ())
 }
 
-async fn build_ready(st: &AppState, uid: Snowflake) -> serde_json::Value {
+async fn build_ready(st: &AppState, uid: Snowflake, session_id: &str) -> serde_json::Value {
     let user_row = sqlx::query("SELECT username, display_name, avatar_id FROM users WHERE id = ?")
         .bind(uid.as_i64())
         .fetch_optional(&st.pool)
@@ -160,7 +239,7 @@ async fn build_ready(st: &AppState, uid: Snowflake) -> serde_json::Value {
         .collect();
 
     json!({
-        "session_id": st.ids.next().to_string(),
+        "session_id": session_id,
         "user": {
             "id": uid.to_string(),
             "username": username,

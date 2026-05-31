@@ -137,3 +137,125 @@ async fn session_without_token_cannot_connect_gateway() {
     // Et poll_event sans Gateway renvoie None.
     assert!(sess.poll_event().await.is_none());
 }
+
+/// Pompe les événements jusqu'à recevoir un `MESSAGE_CREATE` du contenu attendu (sinon panique).
+async fn wait_for_message(sess: &mut Session, content: &str) {
+    for _ in 0..50 {
+        match tokio::time::timeout(std::time::Duration::from_secs(5), sess.poll_event()).await {
+            Ok(Some(ev)) => {
+                if ev.kind() == Some("MESSAGE_CREATE") {
+                    let c = ev
+                        .frame
+                        .d
+                        .as_ref()
+                        .and_then(|d| d.get("content"))
+                        .and_then(|v| v.as_str());
+                    if c == Some(content) {
+                        return;
+                    }
+                }
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    panic!("événement attendu '{content}' non reçu");
+}
+
+#[tokio::test]
+async fn session_resume_replays_events_missed_during_outage() {
+    let base = spawn_server().await;
+    let mut sess = Session::new(InstanceRef::new(&base));
+    sess.register("erin", "erin@s.fr", "motdepasse")
+        .await
+        .expect("register");
+    let _guild = sess.api.create_guild("Resume").await.expect("guild");
+    sess.bootstrap().await.expect("bootstrap");
+    let cid = sess.store.channels.values().next().expect("salon").id;
+
+    sess.connect_gateway().await.expect("gateway");
+    sess.open_channel(cid).await.expect("open");
+
+    // Message reçu en direct → last_seq avance (l'accusé de réception suit la consommation).
+    sess.send_message(cid, "avant").await.expect("send avant");
+    wait_for_message(&mut sess, "avant").await;
+    assert_eq!(sess.gateway_seq(), 1, "un seul événement consommé");
+
+    // Coupure réseau simulée : la session reste résumable côté serveur (fenêtre de grâce).
+    sess.abort_gateway();
+
+    // Pendant la coupure, un message est publié → il doit être bufferisé côté serveur.
+    sess.send_message(cid, "pendant coupure")
+        .await
+        .expect("send pendant");
+
+    // RESUME : accepté, et l'événement manqué est rejoué.
+    let resumed = sess.reconnect().await.expect("reconnect");
+    assert!(resumed, "RESUME accepté (pas de re-IDENTIFY)");
+
+    wait_for_message(&mut sess, "pendant coupure").await;
+    assert!(
+        sess.store
+            .messages_of(cid)
+            .iter()
+            .any(|m| m.content == "pendant coupure"),
+        "le message manqué est appliqué au Store après RESUME"
+    );
+}
+
+#[tokio::test]
+async fn resume_rejects_another_users_session() {
+    let base = spawn_server().await;
+
+    // Gita ouvre une session Gateway → on récupère son session_id.
+    let mut gita = Session::new(InstanceRef::new(&base));
+    gita.register("gita", "gita@s.fr", "motdepasse")
+        .await
+        .expect("register gita");
+    gita.connect_gateway().await.expect("gita gateway");
+    let sid = gita
+        .ready
+        .as_ref()
+        .and_then(|v| v.get("session_id"))
+        .and_then(|v| v.as_str())
+        .expect("session_id")
+        .to_string();
+
+    // Hugo, avec SON jeton, tente de reprendre la session de Gita → doit être refusé (isolation).
+    let mut hugo = Session::new(InstanceRef::new(&base));
+    hugo.register("hugo", "hugo@s.fr", "motdepasse")
+        .await
+        .expect("register hugo");
+    let hugo_access = hugo.access_token().expect("token").to_string();
+
+    match ozone_core::gateway::connect_resume(&base, &hugo_access, &sid, 0)
+        .await
+        .expect("resume call")
+    {
+        ozone_core::gateway::Resumed::Invalid => {}
+        ozone_core::gateway::Resumed::Ok(_) => {
+            panic!("un utilisateur ne doit jamais reprendre la session d'un autre")
+        }
+    }
+}
+
+#[tokio::test]
+async fn resume_unknown_session_is_refused() {
+    let base = spawn_server().await;
+    let mut sess = Session::new(InstanceRef::new(&base));
+    sess.register("frank", "frank@s.fr", "motdepasse")
+        .await
+        .expect("register");
+    let access = sess.access_token().expect("token").to_string();
+
+    // Session inexistante → INVALID_SESSION (le client devra faire un IDENTIFY complet).
+    match ozone_core::gateway::connect_resume(&base, &access, "123456789", 0)
+        .await
+        .expect("resume call")
+    {
+        ozone_core::gateway::Resumed::Invalid => {}
+        ozone_core::gateway::Resumed::Ok(_) => {
+            panic!("une session inconnue ne doit pas être reprise")
+        }
+    }
+}
