@@ -7,11 +7,13 @@
 pub mod cache;
 pub mod client;
 pub mod gateway;
+pub mod session;
 pub mod store;
 pub use cache::Cache;
 pub use client::ApiClient;
 pub use gateway::{connect as gateway_connect, GatewayConnection};
 pub use ozone_proto as proto;
+pub use session::{EventOutcome, Session};
 pub use store::Store;
 
 use ozone_proto::Snowflake;

@@ -25,6 +25,7 @@ ozone-core    logique client multiplateforme :
               - GatewayClient (WS temps réel)                  ← fait (S27, testé E2E : reçoit un MESSAGE_CREATE live)
               - Store normalisé (guildes/salons/messages/présence)  ← fait (S28 ; applique les events Gateway, testé)
               - Cache local (SQLite + rétention bornée)         ← fait (S29 ; persiste/réhydrate, plafonds mémoire+disque, testé)
+              - Session (orchestrateur : auth+bootstrap+temps réel+cache)  ← fait (S30 ; API haut niveau pour l'UI, testé E2E)
               - Moteur vocal (signalisation + WebRTC client)   ← à faire (pair du SFU)
 ozone-ui      application Iced (vues, thèmes, navigation)      ← à faire
 ```

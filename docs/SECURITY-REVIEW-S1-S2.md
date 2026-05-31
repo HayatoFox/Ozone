@@ -504,5 +504,19 @@ Persistance locale du `Store` (démarrage hors-ligne, historique). **Même `sqlx
 - **Mémoire** (`Store`) : plafond par salon (`DEFAULT_MESSAGE_CAP = 1000`, configurable `with_message_cap`) appliqué sur `MESSAGE_CREATE` **et** `set_messages` (éviction des plus anciens).
 - **Disque** (`Cache`) : plafond par salon (`DEFAULT_DISK_CAP = 2000`, configurable `set_disk_cap`) appliqué après chaque `MESSAGE_CREATE` persisté et à `replace_channel_messages`, plus `prune_channel_messages` explicite. Tests : rétention conserve bien les **plus récents**, suppression de salon purge les messages, round-trip persiste/réhydrate à la réouverture.
 
+## 32. S30 — Orchestrateur de session client (`ozone-core::session`)
+
+Colle de haut niveau au-dessus de couches **déjà auditées** (`ApiClient`/Gateway §30, `Store` §30, `Cache` §31). N'introduit **aucune** nouvelle surface réseau/SQL ni logique de droits. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur examiné | Posture |
+|---|---|
+| Jetons au repos | Les jetons (accès/refresh) restent **en mémoire** (`Session` + `InstanceRef`) ; le **cache SQLite ne stocke pas de jeton** (uniquement guildes/salons/messages/présences). Le stockage chiffré au repos (trousseau OS) relèvera du **registre d'instances**/UI — exposé via `access_token()`/`refresh_token()` pour cette future couche. |
+| Boucle d'événements résiliente | `poll_event` applique au `Store` puis persiste au cache en **best-effort** (erreur de cache ignorée) : un incident d'écriture ne peut **pas** bloquer/planter la boucle UI. |
+| Connexion sans authentification | `connect_gateway` échoue **proprement** (`Err`, pas de panique) sans jeton ; `poll_event` sans Gateway renvoie `None` (testé). |
+| Ré-dérivation de droits | Aucune : la session se fie au filtrage **serveur**, comme `Store`/`Cache`. |
+| Réconciliation hors-ligne→ligne | `hydrate_from_cache` (instantané local) puis `bootstrap` (REST) puis flux Gateway : aucune donnée d'autrui exposée (le bootstrap n'obtient que ce que l'API autorise pour le jeton). |
+
+*Suivi (faible, futur) : stockage chiffré des jetons au repos côté registre d'instances ; rotation proactive via `refresh_session` avant expiration.*
+
 ---
-*Document vivant — revue effectuée pour S1 → S29 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S30 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons (registre d'instances), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
