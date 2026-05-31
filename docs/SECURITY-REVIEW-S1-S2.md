@@ -48,6 +48,7 @@
 | **R4** | ~~Info~~ **Résolu (S6b)** | ~~`join_invite` ne vérifie pas un **bannissement**~~. | Contrôle de ban ajouté dans `join_invite` (cf. §10). |
 | **R5** | Faible | **Course sur le quota d'invitation d'instance** : la vérification `uses < max_uses` et la consommation `uses + 1` ne sont pas atomiques (deux statements séparés). Deux inscriptions concurrentes avec la même invitation à usage unique pourraient dépasser le quota de 1. | Consommation atomique via `UPDATE … WHERE uses < max_uses` à l'intérieur d'une transaction `BEGIN IMMEDIATE` (passe de durcissement transactionnel de `register`). Risque réel faible : scénario de bootstrap self-host, très faible concurrence sur la rédemption. |
 | **R6** | Moyenne | **Exécution de webhook non authentifiée et sans rate-limit** (S7) : un détenteur du jeton peut poster sans session ni quota → spam/abus. | Couche de rate-limit (cf. R1) avec **quota dédié par webhook** ; option de désactivation/rotation rapide du jeton. À traiter avant exposition publique. |
+| **R7** | Élevée (plan média, **avant exposition**) | **SFU sans authz** (S17) : `POST /sfu/rooms/:room/peers` n'exige/vérifie **pas** le jeton vocal émis par l'API → n'importe qui pourrait rejoindre un salon média en connaissant l'identifiant. | Le SFU **doit vérifier le jeton `VOICE_SERVER_UPDATE`** (secret partagé `OZONE_VOICE_SECRET`) et que le `room` correspond, avant d'admettre un pair. Bloquant **avant tout déploiement du média** ; sans impact tant que le SFU n'est pas exposé. Cf. `crates/ozone-sfu/README.md`. |
 
 ## 4. Comment rejouer
 
@@ -338,5 +339,16 @@ Défenses (`routes_voice.rs`) :
 - **Modération étagée** : `MUTE_MEMBERS` / `DEAFEN_MEMBERS` / `MOVE_MEMBERS` selon l'action ; cible obligatoirement connectée au vocal de la guilde ; **propriétaire protégé** ; déplacement borné aux salons vocaux de la même guilde (anti-IDOR inter-guildes).
 - **Nettoyage** : la fermeture de la session Gateway libère l'état vocal (pas d'état fantôme). Jeton vocal = JWT signé `kind="voice"`, TTL 1 h, à vérifier par le futur SFU. Requêtes paramétrées.
 
+## 22. S17 — Nœud média SFU (fondation WebRTC)
+
+Crate **séparée** `ozone-sfu` (binaire média) : pile WebRTC (`webrtc-rs`), cœur SFU (salles, pairs, offre/réponse, relais de pistes RTP), signalisation HTTP. **Le média n'est pas encore exposé.** Audit de fondation par le mainteneur.
+
+- **Isolation crypto** : `ring`/`rustls` (tirés par WebRTC) sont **confinés à `ozone-sfu`** ; `ozone-api` reste sans `ring` (vérifié : seul `ozone-sfu` compile `ring`). Le risque d'une CVE `ring` est cantonné au binaire média, optionnel et séparable.
+- **Validation d'entrée** : l'offre SDP est parsée/validée par la pile WebRTC ; une offre invalide → `400`. Pas d'interpolation de chaîne.
+- **R7 (noté, bloquant avant exposition)** : le SFU **ne vérifie pas encore le jeton vocal** de l'API → le plan média est **non authentifié** (cf. tableau §3 et `ozone-sfu/README.md`). Sans impact tant que le SFU n'est pas déployé/exposé ; **à brancher impérativement** (vérification du jeton `VOICE_SERVER_UPDATE` + correspondance du salon) avant toute mise en service.
+- Test unitaire : construction du SFU (MediaEngine + intercepteurs) et registre de salles ; le chemin média complet (RTP/ICE/DTLS) est un test **E2E manuel** (deux clients WebRTC réels).
+
+> Rappel : `VOICE_SERVER_UPDATE` (qui porte le jeton) est déjà diffusé en **portée `User`** par l'API (S16) — le jeton ne fuite pas aux autres. Reste à ce que le SFU le **consomme et le vérifie**.
+
 ---
-*Document vivant — revue effectuée pour S1 → S16 ; à reconduire à chaque couche. À compléter par : **le sous-projet média vocal** (SFU/SRTP/ICE + E2EE DAVE/MLS) et son audit dédié, rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S17 ; à reconduire à chaque couche. À compléter par : **authz du plan média (R7, bloquant avant exposition)**, renégociation WS (mesh N-à-N), E2EE DAVE/MLS et son audit, rate-limiting (R1/R6), RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
