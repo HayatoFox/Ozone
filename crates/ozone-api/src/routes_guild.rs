@@ -9,7 +9,7 @@ use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
-use ozone_proto::dto::{CreateInvite, Guild, Invite, Member, User};
+use ozone_proto::dto::{CreateInvite, Guild, Invite, InvitePreview, Member, User};
 use ozone_proto::{perms, Snowflake};
 use sqlx::Row;
 
@@ -252,4 +252,69 @@ pub async fn join_invite(
         owner_id: Snowflake::from_i64(g.get::<i64, _>("owner_id")),
         icon_id: g.get("icon_id"),
     }))
+}
+
+/// `GET /invites/:code` — aperçu d'une invitation **sans** rejoindre la guilde.
+pub async fn preview_invite(
+    State(st): State<AppState>,
+    _user: AuthUser,
+    Path(code): Path<String>,
+) -> AppResult<Json<InvitePreview>> {
+    let row = sqlx::query("SELECT guild_id, inviter_id, expires_at FROM invites WHERE code = ?")
+        .bind(&code)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("invitation invalide"))?;
+    let expires_at: Option<i64> = row.get("expires_at");
+    if let Some(exp) = expires_at {
+        if exp < now_ms() {
+            return Err(AppError::not_found("invitation expirée"));
+        }
+    }
+    let gid: i64 = row.get("guild_id");
+    let inviter: i64 = row.get("inviter_id");
+    let g = sqlx::query("SELECT name, icon_id FROM guilds WHERE id = ?")
+        .bind(gid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let member_count: i64 =
+        sqlx::query("SELECT COUNT(*) AS c FROM guild_members WHERE guild_id = ?")
+            .bind(gid)
+            .fetch_one(&st.pool)
+            .await?
+            .get("c");
+    Ok(Json(InvitePreview {
+        code,
+        guild_id: Snowflake::from_i64(gid),
+        guild_name: g.get("name"),
+        guild_icon: g.get("icon_id"),
+        inviter_id: Snowflake::from_i64(inviter),
+        member_count,
+        expires_at: expires_at.map(|v| v as u64),
+    }))
+}
+
+/// `DELETE /invites/:code` — révoque une invitation (son créateur ou `MANAGE_GUILD`).
+pub async fn revoke_invite(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(code): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let row = sqlx::query("SELECT guild_id, inviter_id FROM invites WHERE code = ?")
+        .bind(&code)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("invitation invalide"))?;
+    let gid: i64 = row.get("guild_id");
+    let inviter: i64 = row.get("inviter_id");
+    // Le créateur peut révoquer la sienne ; sinon il faut MANAGE_GUILD.
+    if inviter != user.id.as_i64() {
+        pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_GUILD).await?;
+    }
+    sqlx::query("DELETE FROM invites WHERE code = ?")
+        .bind(&code)
+        .execute(&st.pool)
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
 }

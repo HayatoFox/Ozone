@@ -325,6 +325,18 @@ pub struct CreateInvite {
     pub max_age: i64,
 }
 
+/// Aperçu d'une invitation (avant de rejoindre) : infos de guilde sans la rejoindre.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InvitePreview {
+    pub code: String,
+    pub guild_id: Snowflake,
+    pub guild_name: String,
+    pub guild_icon: Option<String>,
+    pub inviter_id: Snowflake,
+    pub member_count: i64,
+    pub expires_at: Option<u64>,
+}
+
 // ──────────────────────────── Relations (amis / blocages) ────────────────────────────
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

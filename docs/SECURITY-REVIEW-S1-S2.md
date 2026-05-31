@@ -61,7 +61,8 @@ cargo test -p ozone-api --test security_s10  # intrusion S10 (profils & réglage
 cargo test -p ozone-api --test security_s11  # intrusion S11 (présence)
 cargo test -p ozone-api --test realtime_social # S12 — portée des événements relations/MP
 cargo test -p ozone-api --test security_s13  # intrusion S13 (gestion de guilde)
-cargo test -p ozone-api                       # suite complète (92 tests)
+cargo test -p ozone-api --test invites       # S14 — aperçu & révocation d'invitations
+cargo test -p ozone-api                       # suite complète (94 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -300,5 +301,18 @@ Défenses (`routes_chat.rs`) :
 - **Diffusion** : `GUILD_CREATE` en portée `User` (créateur), `GUILD_UPDATE` en portée `Guild` (membres), `GUILD_DELETE` adressé à chaque **ancien** membre en portée `User` (la guilde n'existe plus → la portée `Guild` ne livrerait plus rien).
 - Validation du nom (1–100), icône effaçable (chaîne vide → `NULL`).
 
+## 19. S14 — Aperçu & révocation d'invitations
+
+`GET /invites/:code` (aperçu sans rejoindre) et `DELETE /invites/:code` (révocation). Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`invites.rs`) | Résultat |
+|---|---|---|
+| L'aperçu fait-il rejoindre la guilde ? | `preview_does_not_join` | non (lecture seule ; l'utilisateur reste non-membre) |
+| Révoquer l'invitation **d'autrui** sans `MANAGE_GUILD` | `revoke_authorization` | `403` |
+| Révoquer **sa propre** invitation | idem | `200` (créateur autorisé) |
+| Rejoindre via une invitation révoquée | idem | `404` |
+
+Défenses (`routes_guild.rs`) : l'aperçu est en **lecture seule** (n'insère aucun membre) et n'expose que des informations d'invitation (nom de guilde, nombre de membres, créateur) — précisément ce qu'une invitation est censée révéler ; la révocation exige d'être **le créateur de l'invitation** ou de détenir `MANAGE_GUILD` ; expiration vérifiée à l'aperçu. Requêtes paramétrées.
+
 ---
-*Document vivant — revue effectuée pour S1 → S13 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S14 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*

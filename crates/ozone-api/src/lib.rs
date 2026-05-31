@@ -200,7 +200,12 @@ pub fn build_app(state: AppState) -> Router {
             "/guilds/:guild_id/invites",
             get(routes_guild::list_invites).post(routes_guild::create_invite),
         )
-        .route("/invites/:code", post(routes_guild::join_invite))
+        .route(
+            "/invites/:code",
+            post(routes_guild::join_invite)
+                .get(routes_guild::preview_invite)
+                .delete(routes_guild::revoke_invite),
+        )
         // Expressions (emojis / stickers / soundboard)
         .route(
             "/guilds/:guild_id/emojis",
