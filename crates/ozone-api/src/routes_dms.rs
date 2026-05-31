@@ -7,7 +7,7 @@
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -120,7 +120,7 @@ pub async fn open_or_create_dm(
     if recips.len() == 1 {
         let target = recips[0];
         // Déduplication : réutilise le MP 1:1 existant s'il y en a un.
-        let existing: Option<i64> = sqlx::query(
+        let existing_id: Option<i64> = sqlx::query(
             "SELECT c.id FROM channels c WHERE c.type = 1 AND c.guild_id IS NULL \
              AND EXISTS (SELECT 1 FROM dm_recipients r WHERE r.channel_id = c.id AND r.user_id = ?) \
              AND EXISTS (SELECT 1 FROM dm_recipients r WHERE r.channel_id = c.id AND r.user_id = ?) \
@@ -132,7 +132,8 @@ pub async fn open_or_create_dm(
         .await?
         .map(|r| r.get("id"));
 
-        let cid = match existing {
+        let is_new = existing_id.is_none();
+        let cid = match existing_id {
             Some(cid) => cid,
             None => {
                 let id = st.ids.next();
@@ -156,7 +157,15 @@ pub async fn open_or_create_dm(
                 id.as_i64()
             }
         };
-        Ok(Json(build_dm_channel(&st, cid).await?))
+        let ch = build_dm_channel(&st, cid).await?;
+        if is_new {
+            st.publish(
+                EventScope::Dm(cid),
+                "CHANNEL_CREATE",
+                serde_json::to_value(&ch).unwrap_or_default(),
+            );
+        }
+        Ok(Json(ch))
     } else {
         // Groupe de MP (propriétaire = créateur).
         let id = st.ids.next();
@@ -176,7 +185,13 @@ pub async fn open_or_create_dm(
                 .execute(&st.pool)
                 .await?;
         }
-        Ok(Json(build_dm_channel(&st, id.as_i64()).await?))
+        let ch = build_dm_channel(&st, id.as_i64()).await?;
+        st.publish(
+            EventScope::Dm(id.as_i64()),
+            "CHANNEL_CREATE",
+            serde_json::to_value(&ch).unwrap_or_default(),
+        );
+        Ok(Json(ch))
     }
 }
 
@@ -242,6 +257,11 @@ pub async fn add_recipient(
         .bind(target)
         .execute(&st.pool)
         .await?;
+    st.publish(
+        EventScope::Dm(cid),
+        "CHANNEL_RECIPIENT_ADD",
+        json!({ "channel_id": cid.to_string(), "user_id": target.to_string() }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -281,6 +301,18 @@ pub async fn remove_recipient(
         .bind(target)
         .execute(&st.pool)
         .await?;
+    // Membres restants (portée groupe) + l'utilisateur retiré (portée individuelle, il n'est plus destinataire).
+    let payload = json!({ "channel_id": cid.to_string(), "user_id": target.to_string() });
+    st.publish(
+        EventScope::Dm(cid),
+        "CHANNEL_RECIPIENT_REMOVE",
+        payload.clone(),
+    );
+    st.publish(
+        EventScope::User(target),
+        "CHANNEL_RECIPIENT_REMOVE",
+        payload,
+    );
 
     // Si le propriétaire part, on transfère la propriété (ou on supprime le groupe vide).
     if Some(target) == owner {

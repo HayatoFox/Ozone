@@ -59,7 +59,8 @@ cargo test -p ozone-api --test security_s8   # intrusion S8 (lecture, mentions, 
 cargo test -p ozone-api --test realtime      # S9 — émission/portée des événements Gateway
 cargo test -p ozone-api --test security_s10  # intrusion S10 (profils & réglages)
 cargo test -p ozone-api --test security_s11  # intrusion S11 (présence)
-cargo test -p ozone-api                       # suite complète (87 tests)
+cargo test -p ozone-api --test realtime_social # S12 — portée des événements relations/MP
+cargo test -p ozone-api                       # suite complète (88 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -265,5 +266,21 @@ Défenses (`presence.rs`, `routes_presence.rs`, `gateway.rs`) :
 - **Cycle de vie robuste** : toutes les sorties de la boucle Gateway (fermeture, erreur, échec d'envoi) passent par un nettoyage unique qui décrémente le compteur et repasse l'utilisateur hors ligne à la dernière déconnexion (comptage multi-sessions).
 - Limite connue (non-sécurité) : le statut désiré est en mémoire (perdu à la déconnexion complète / au redémarrage) — persistance en base possible ultérieurement.
 
+## 17. S12 — Événements temps réel des relations & MP
+
+Complète la couche temps réel (S9) : demandes/suppressions d'amis et nouveaux MP poussés en direct, en portées `User`/`Dm`. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`realtime_social.rs`) | Résultat |
+|---|---|---|
+| Demande d'ami → cible notifiée en portée `User(cible)` | `friend_request_and_dm_are_scoped` | `RELATIONSHIP_ADD` (type `incoming`) |
+| Confidentialité : seul l'intéressé reçoit l'événement `User` | idem | `should_deliver` vrai pour la cible, **faux** pour un tiers (et l'émetteur) |
+| Nouveau MP → portée `Dm`, destinataires uniquement | idem | `CHANNEL_CREATE`, `should_deliver` faux pour un tiers |
+
+Défenses :
+- **Portée individuelle/MP** : `RELATIONSHIP_ADD`/`RELATIONSHIP_REMOVE` en `EventScope::User` (chaque partie ses propres sessions) ; `CHANNEL_CREATE`/`CHANNEL_RECIPIENT_*` en `EventScope::Dm` (destinataires actuels). Routage filtré par `should_deliver`.
+- **Le blocage ne fuite pas** : bloquer un utilisateur ne lui envoie **aucun** événement (seules les sessions de l'auteur sont synchronisées) — conforme à Discord (on ne révèle pas un blocage).
+- **Retrait de groupe** : l'utilisateur retiré est notifié via `User(cible)` (il n'est plus destinataire, donc hors portée `Dm`), sans fuite aux ex-membres au-delà du groupe.
+- Payloads minimaux (identifiants + type de relation).
+
 ---
-*Document vivant — revue effectuée pour S1 → S11 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), émission d'événements pour relations/MP, et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S12 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*

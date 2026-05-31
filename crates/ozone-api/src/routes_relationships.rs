@@ -5,7 +5,7 @@
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -102,11 +102,32 @@ async fn friend_request(st: &AppState, me: i64, target: i64) -> AppResult<serde_
             // L'autre avait déjà envoyé une demande : on accepte mutuellement.
             upsert_relationship(st, me, target, "friend", now).await?;
             upsert_relationship(st, target, me, "friend", now).await?;
+            st.publish(
+                EventScope::User(target),
+                "RELATIONSHIP_ADD",
+                serde_json::json!({ "user_id": me.to_string(), "type": "friend" }),
+            );
+            st.publish(
+                EventScope::User(me),
+                "RELATIONSHIP_ADD",
+                serde_json::json!({ "user_id": target.to_string(), "type": "friend" }),
+            );
         }
         _ => {
             // Nouvelle demande sortante.
             upsert_relationship(st, me, target, "outgoing", now).await?;
             upsert_relationship(st, target, me, "incoming", now).await?;
+            // Notifie la cible (demande entrante) et ses propres sessions (sortante).
+            st.publish(
+                EventScope::User(target),
+                "RELATIONSHIP_ADD",
+                serde_json::json!({ "user_id": me.to_string(), "type": "incoming" }),
+            );
+            st.publish(
+                EventScope::User(me),
+                "RELATIONSHIP_ADD",
+                serde_json::json!({ "user_id": target.to_string(), "type": "outgoing" }),
+            );
         }
     }
 
@@ -185,6 +206,12 @@ pub async fn add_relationship(
             .bind(me)
             .execute(&st.pool)
             .await?;
+        // Le blocage ne notifie PAS la cible (Discord ne révèle pas un blocage) : sync de soi seulement.
+        st.publish(
+            EventScope::User(me),
+            "RELATIONSHIP_ADD",
+            serde_json::json!({ "user_id": target.to_string(), "type": "blocked" }),
+        );
         return Ok(Json(serde_json::json!({ "ok": true })));
     }
 
@@ -224,6 +251,16 @@ pub async fn remove_relationship(
         .execute(&st.pool)
         .await?;
 
+    st.publish(
+        EventScope::User(target),
+        "RELATIONSHIP_REMOVE",
+        serde_json::json!({ "user_id": me.to_string() }),
+    );
+    st.publish(
+        EventScope::User(me),
+        "RELATIONSHIP_REMOVE",
+        serde_json::json!({ "user_id": target.to_string() }),
+    );
     Ok(Json(serde_json::json!({ "ok": true })))
 }
 
