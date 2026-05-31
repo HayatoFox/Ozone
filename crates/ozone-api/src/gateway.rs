@@ -49,7 +49,11 @@ async fn handle_socket(socket: WebSocket, st: AppState) {
                                         seq += 1;
                                         let ready = build_ready(&st, uid).await;
                                         let f = GatewayFrame::dispatch("READY", ready, seq);
-                                        if send_frame(&mut tx, &f).await.is_err() { return; }
+                                        if send_frame(&mut tx, &f).await.is_err() { break; }
+                                        // Présence : 1ère connexion → en ligne, diffusé aux guildes partagées.
+                                        if st.presence.connect(uid.as_i64()) {
+                                            broadcast_presence(&st, uid.as_i64()).await;
+                                        }
                                     }
                                     None => {
                                         let f = GatewayFrame::with_data(opcode::INVALID_SESSION, json!(false));
@@ -59,7 +63,7 @@ async fn handle_socket(socket: WebSocket, st: AppState) {
                             }
                             opcode::HEARTBEAT => {
                                 let f = GatewayFrame::new(opcode::HEARTBEAT_ACK);
-                                if send_frame(&mut tx, &f).await.is_err() { return; }
+                                if send_frame(&mut tx, &f).await.is_err() { break; }
                             }
                             _ => {}
                         }
@@ -82,6 +86,33 @@ async fn handle_socket(socket: WebSocket, st: AppState) {
                 }
             }
         }
+    }
+
+    // Déconnexion : si c'était la dernière session de l'utilisateur, il passe hors ligne.
+    if let Some(uid) = authed {
+        if st.presence.disconnect(uid.as_i64()) {
+            broadcast_presence(&st, uid.as_i64()).await;
+        }
+    }
+}
+
+/// Diffuse le statut **effectif** d'un utilisateur aux guildes dont il est membre
+/// (portée `Guild` ⇒ uniquement les membres concernés, via `should_deliver`).
+pub async fn broadcast_presence(st: &AppState, uid: i64) {
+    let (status, custom) = st.presence.effective(uid);
+    let payload = json!({
+        "user_id": uid.to_string(),
+        "status": status,
+        "custom_status": custom,
+    });
+    let guilds = sqlx::query("SELECT guild_id FROM guild_members WHERE user_id = ?")
+        .bind(uid)
+        .fetch_all(&st.pool)
+        .await
+        .unwrap_or_default();
+    for g in guilds {
+        let gid: i64 = g.get("guild_id");
+        st.publish(EventScope::Guild(gid), "PRESENCE_UPDATE", payload.clone());
     }
 }
 

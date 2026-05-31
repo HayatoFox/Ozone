@@ -58,7 +58,8 @@ cargo test -p ozone-api --test security_s7   # intrusion S7 (webhooks, recherche
 cargo test -p ozone-api --test security_s8   # intrusion S8 (lecture, mentions, notifications)
 cargo test -p ozone-api --test realtime      # S9 — émission/portée des événements Gateway
 cargo test -p ozone-api --test security_s10  # intrusion S10 (profils & réglages)
-cargo test -p ozone-api                       # suite complète (83 tests)
+cargo test -p ozone-api --test security_s11  # intrusion S11 (présence)
+cargo test -p ozone-api                       # suite complète (87 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -247,5 +248,22 @@ Défenses (`routes_users.rs`) :
 - **Validations** : bio ≤ 190, pronoms ≤ 40, nom affiché ≤ 32, avatar/bannière ≤ 256, couleur ≤ `0xFFFFFF` ; longueurs comptées en caractères Unicode ; tout est paramétré (aucune injection).
 - Choix de conception noté : le profil est **public au sein de l'instance** (tout compte authentifié peut le consulter) — cohérent avec le modèle de confiance mono-instance ; restriction « guilde commune / ami » possible ultérieurement.
 
+## 16. S11 — Présence & statut
+
+Registre de présence en mémoire (connexions actives suivies par le cycle de vie Gateway), statut désiré (`online`/`idle`/`dnd`/`invisible`) + statut personnalisé, diffusion `PRESENCE_UPDATE`. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`security_s11.rs`) | Résultat |
+|---|---|---|
+| Définir sa présence sans jeton / statut invalide / statut perso trop long | `presence_requires_auth_and_valid_status` | `401` / `400` / `400` |
+| Lire les présences d'une guilde en **non-membre** | `presences_member_only_and_invisible_hidden` | `403` |
+| Membre **invisible** visible par les autres ? | idem | masqué (absent des présences) |
+
+Défenses (`presence.rs`, `routes_presence.rs`, `gateway.rs`) :
+- **Confidentialité du routage** : `PRESENCE_UPDATE` est diffusé en portée `Guild` (membres des guildes partagées), filtré par `should_deliver` ; `GET /guilds/:id/presences` exige `require_guild_member`.
+- **Invisible = hors ligne pour autrui** : le statut **effectif** renvoyé/diffusé est `offline` si l'utilisateur est invisible ou non connecté, et le **statut personnalisé est supprimé** dans ce cas (aucune fuite).
+- **Édition limitée à soi** : `set_status` est clé sur la session ; aucun moyen de modifier la présence d'un tiers. Statut validé (liste blanche), statut perso ≤ 128.
+- **Cycle de vie robuste** : toutes les sorties de la boucle Gateway (fermeture, erreur, échec d'envoi) passent par un nettoyage unique qui décrémente le compteur et repasse l'utilisateur hors ligne à la dernière déconnexion (comptage multi-sessions).
+- Limite connue (non-sécurité) : le statut désiré est en mémoire (perdu à la déconnexion complète / au redémarrage) — persistance en base possible ultérieurement.
+
 ---
-*Document vivant — revue effectuée pour S1 → S10 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), présence/statut + RESUME Gateway, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), émission d'événements pour relations/MP, et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S11 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), RESUME Gateway + persistance du statut désiré, fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), émission d'événements pour relations/MP, et un audit du futur chiffrement vocal DAVE/MLS.*

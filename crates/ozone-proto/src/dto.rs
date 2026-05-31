@@ -700,6 +700,25 @@ pub struct NotificationSetting {
     pub muted_until: Option<i64>,
 }
 
+// ──────────────────────────── Présence & statut ────────────────────────────
+
+/// Statut effectif d'un utilisateur (`online` | `idle` | `dnd` | `offline`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PresenceView {
+    pub user_id: Snowflake,
+    pub status: String,
+    pub custom_status: Option<String>,
+}
+
+/// Mise à jour de son statut de présence.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct SetPresence {
+    /// `online` | `idle` | `dnd` | `invisible`.
+    pub status: String,
+    #[serde(default)]
+    pub custom_status: Option<String>,
+}
+
 // ──────────────────────────── Profil & réglages ────────────────────────────
 
 /// Profil public d'un utilisateur (sans e-mail).

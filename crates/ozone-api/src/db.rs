@@ -108,5 +108,6 @@ pub async fn bootstrap_state(cfg: &Config) -> anyhow::Result<AppState> {
         jwt_secret: Arc::new(secret.into_bytes()),
         instance: Arc::new(runtime),
         hub,
+        presence: Arc::new(crate::presence::Registry::new()),
     })
 }

@@ -9,6 +9,7 @@ pub mod error;
 pub mod extract;
 pub mod gateway;
 pub mod permissions;
+pub mod presence;
 pub mod routes_auth;
 pub mod routes_chat;
 pub mod routes_dms;
@@ -20,6 +21,7 @@ pub mod routes_instance_admin;
 pub mod routes_messages;
 pub mod routes_moderation;
 pub mod routes_notifications;
+pub mod routes_presence;
 pub mod routes_relationships;
 pub mod routes_roles;
 pub mod routes_soundboard;
@@ -80,6 +82,7 @@ pub fn build_app(state: AppState) -> Router {
             "/users/@me/settings",
             get(routes_users::get_settings).put(routes_users::put_settings),
         )
+        .route("/users/@me/presence", put(routes_presence::set_presence))
         .route("/users/:user_id/profile", get(routes_users::get_profile))
         // Relations (amis / blocages / notes)
         .route(
@@ -169,6 +172,10 @@ pub fn build_app(state: AppState) -> Router {
         )
         // Membres & invitations
         .route("/guilds/:guild_id/members", get(routes_guild::list_members))
+        .route(
+            "/guilds/:guild_id/presences",
+            get(routes_presence::list_presences),
+        )
         .route(
             "/guilds/:guild_id/members/:user_id",
             patch(routes_moderation::update_member).delete(routes_guild::kick_member),

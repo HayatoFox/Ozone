@@ -15,6 +15,8 @@ pub struct AppState {
     pub instance: Arc<InstanceRuntime>,
     /// Bus de diffusion en mémoire (fan-out gateway en mode tout-en-un).
     pub hub: broadcast::Sender<HubEvent>,
+    /// Registre de présence (connexions actives + statut désiré).
+    pub presence: Arc<crate::presence::Registry>,
 }
 
 /// Runtime de l'instance (chargé au bootstrap).
