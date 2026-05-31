@@ -280,16 +280,20 @@ pub async fn join_invite(
         serde_json::json!({ "guild_id": gid.to_string(), "user_id": user.id.to_string() }),
     );
 
-    let g = sqlx::query("SELECT id, name, owner_id, icon_id FROM guilds WHERE id = ?")
-        .bind(gid)
-        .fetch_optional(&st.pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let g = sqlx::query(
+        "SELECT id, name, owner_id, icon_id, description, discoverable FROM guilds WHERE id = ?",
+    )
+    .bind(gid)
+    .fetch_optional(&st.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
     Ok(Json(Guild {
         id: Snowflake::from_i64(g.get::<i64, _>("id")),
         name: g.get("name"),
         owner_id: Snowflake::from_i64(g.get::<i64, _>("owner_id")),
         icon_id: g.get("icon_id"),
+        description: g.get("description"),
+        discoverable: g.get::<i64, _>("discoverable") != 0,
     }))
 }
 

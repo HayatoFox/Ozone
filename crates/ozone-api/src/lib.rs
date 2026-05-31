@@ -12,6 +12,7 @@ pub mod permissions;
 pub mod presence;
 pub mod routes_auth;
 pub mod routes_chat;
+pub mod routes_discovery;
 pub mod routes_dms;
 pub mod routes_emojis;
 pub mod routes_events;
@@ -224,6 +225,12 @@ pub fn build_app(state: AppState) -> Router {
             post(routes_guild::join_invite)
                 .get(routes_guild::preview_invite)
                 .delete(routes_guild::revoke_invite),
+        )
+        // Découverte de guildes publiques
+        .route("/discovery/guilds", get(routes_discovery::list_discovery))
+        .route(
+            "/discovery/guilds/:guild_id/join",
+            post(routes_discovery::join_discovery),
         )
         // Expressions (emojis / stickers / soundboard)
         .route(

@@ -18,6 +18,8 @@ use sqlx::Row;
 
 const CHANNEL_SELECT: &str =
     "SELECT id, guild_id, type AS kind, name, topic, position, parent_id, nsfw, rate_limit_per_user FROM channels";
+const GUILD_SELECT: &str =
+    "SELECT id, name, owner_id, icon_id, description, discoverable FROM guilds";
 const ALLOWED_KINDS: [u8; 7] = [0, 2, 4, 5, 13, 15, 16];
 const MAX_SLOWMODE: i32 = 21_600; // 6 h
 
@@ -27,6 +29,17 @@ fn emit(st: &AppState, scope: EventScope, t: &str, d: serde_json::Value) {
         d,
         scope,
     });
+}
+
+fn row_to_guild(r: &SqliteRow) -> Guild {
+    Guild {
+        id: Snowflake::from_i64(r.get::<i64, _>("id")),
+        name: r.get("name"),
+        owner_id: Snowflake::from_i64(r.get::<i64, _>("owner_id")),
+        icon_id: r.get("icon_id"),
+        description: r.get("description"),
+        discoverable: r.get::<i64, _>("discoverable") != 0,
+    }
 }
 
 // ───────────────────────────── Guildes ─────────────────────────────
@@ -86,6 +99,8 @@ pub async fn create_guild(
         name: name.to_string(),
         owner_id: user.id,
         icon_id: None,
+        description: None,
+        discoverable: false,
     };
     // Notifie le créateur (ses sessions) de la nouvelle guilde.
     st.publish(
@@ -104,20 +119,15 @@ pub async fn get_guild(
 ) -> AppResult<Json<Guild>> {
     let gid = parse_i64(&guild_id)?;
     pg::require_guild_member(&st.pool, gid, user.id.as_i64()).await?;
-    let g = sqlx::query("SELECT id, name, owner_id, icon_id FROM guilds WHERE id = ?")
+    let g = sqlx::query(&format!("{GUILD_SELECT} WHERE id = ?"))
         .bind(gid)
         .fetch_optional(&st.pool)
         .await?
         .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
-    Ok(Json(Guild {
-        id: Snowflake::from_i64(g.get::<i64, _>("id")),
-        name: g.get("name"),
-        owner_id: Snowflake::from_i64(g.get::<i64, _>("owner_id")),
-        icon_id: g.get("icon_id"),
-    }))
+    Ok(Json(row_to_guild(&g)))
 }
 
-/// `PATCH /guilds/:guild_id` — renommer / changer l'icône (`MANAGE_GUILD`).
+/// `PATCH /guilds/:guild_id` — renommer, icône, description, découverte (`MANAGE_GUILD`).
 pub async fn update_guild(
     State(st): State<AppState>,
     user: AuthUser,
@@ -126,7 +136,7 @@ pub async fn update_guild(
 ) -> AppResult<Json<Guild>> {
     let gid = parse_i64(&guild_id)?;
     pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_GUILD).await?;
-    let g = sqlx::query("SELECT id, name, owner_id, icon_id FROM guilds WHERE id = ?")
+    let g = sqlx::query(&format!("{GUILD_SELECT} WHERE id = ?"))
         .bind(gid)
         .fetch_optional(&st.pool)
         .await?
@@ -149,17 +159,36 @@ pub async fn update_guild(
         Some(s) => Some(s),
         None => g.get("icon_id"),
     };
-    sqlx::query("UPDATE guilds SET name = ?, icon_id = ? WHERE id = ?")
-        .bind(&name)
-        .bind(icon_id.as_deref())
-        .bind(gid)
-        .execute(&st.pool)
-        .await?;
+    let description = match req.description {
+        Some(s) if s.trim().is_empty() => None,
+        Some(s) => {
+            if s.chars().count() > 300 {
+                return Err(AppError::bad_request("description trop longue (max 300)"));
+            }
+            Some(s)
+        }
+        None => g.get("description"),
+    };
+    let discoverable = req
+        .discoverable
+        .unwrap_or_else(|| g.get::<i64, _>("discoverable") != 0);
+    sqlx::query(
+        "UPDATE guilds SET name = ?, icon_id = ?, description = ?, discoverable = ? WHERE id = ?",
+    )
+    .bind(&name)
+    .bind(icon_id.as_deref())
+    .bind(description.as_deref())
+    .bind(discoverable as i64)
+    .bind(gid)
+    .execute(&st.pool)
+    .await?;
     let guild = Guild {
         id: Snowflake::from_i64(gid),
         name,
         owner_id: Snowflake::from_i64(g.get::<i64, _>("owner_id")),
         icon_id,
+        description,
+        discoverable,
     };
     st.publish(
         EventScope::Guild(gid),
@@ -247,22 +276,13 @@ pub async fn list_guilds(
     user: AuthUser,
 ) -> AppResult<Json<Vec<Guild>>> {
     let rows = sqlx::query(
-        "SELECT g.id, g.name, g.owner_id, g.icon_id FROM guilds g \
+        "SELECT g.id, g.name, g.owner_id, g.icon_id, g.description, g.discoverable FROM guilds g \
          JOIN guild_members m ON m.guild_id = g.id WHERE m.user_id = ? ORDER BY g.id",
     )
     .bind(user.id.as_i64())
     .fetch_all(&st.pool)
     .await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| Guild {
-                id: Snowflake::from_i64(r.get::<i64, _>("id")),
-                name: r.get("name"),
-                owner_id: Snowflake::from_i64(r.get::<i64, _>("owner_id")),
-                icon_id: r.get("icon_id"),
-            })
-            .collect(),
-    ))
+    Ok(Json(rows.iter().map(row_to_guild).collect()))
 }
 
 // ───────────────────────────── Salons ─────────────────────────────

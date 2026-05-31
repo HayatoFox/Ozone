@@ -117,6 +117,10 @@ pub struct Guild {
     pub name: String,
     pub owner_id: Snowflake,
     pub icon_id: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub discoverable: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -130,6 +134,21 @@ pub struct UpdateGuild {
     pub name: Option<String>,
     #[serde(default)]
     pub icon_id: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    /// Inscrire/retirer la guilde de l'annuaire de découverte.
+    #[serde(default)]
+    pub discoverable: Option<bool>,
+}
+
+/// Entrée de l'annuaire de découverte (guilde publique).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct DiscoveryGuild {
+    pub id: Snowflake,
+    pub name: String,
+    pub icon_id: Option<String>,
+    pub description: Option<String>,
+    pub member_count: i64,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

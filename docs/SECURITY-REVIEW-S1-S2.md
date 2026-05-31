@@ -66,8 +66,9 @@ cargo test -p ozone-api --test invites       # S14 — aperçu & révocation d'i
 cargo test -p ozone-api --test leave_guild   # S15 — quitter une guilde
 cargo test -p ozone-api --test security_s16  # intrusion S16 (signalisation vocale)
 cargo test -p ozone-sfu --test auth          # S18 — authz du plan média (SFU)
-cargo test -p ozone-api                       # API : suite complète (99 tests)
-cargo test --workspace                        # API + SFU + proto (106 tests)
+cargo test -p ozone-api --test discovery     # S20 — découverte de guildes publiques
+cargo test -p ozone-api                       # API : suite complète (101 tests)
+cargo test --workspace                        # API + SFU + proto (108 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -372,5 +373,19 @@ Conception :
 - **Fail-closed** : sans `OZONE_VOICE_SECRET`, le SFU refuse toute connexion (`503`) — pas de mode « ouvert » accidentel.
 - **Isolation crypto maintenue** : `ozone-proto` n'introduit que `hmac`/`sha2`/`base64` (pas de `ring`) ; `ring` reste confiné à `ozone-sfu` (via WebRTC).
 
+## 24. S20 — Annuaire de découverte (guildes publiques)
+
+`GET /discovery/guilds` (liste opt-in) + `POST /discovery/guilds/:id/join` (adhésion directe). Champs `description`/`discoverable` ajoutés aux guildes. Écrit et audité par le mainteneur. **Aucune faille exploitable.** (S19 — déploiement du SFU — sans surface applicative nouvelle.)
+
+| Vecteur testé | Test (`discovery.rs`) | Résultat |
+|---|---|---|
+| Guilde non publique listée / révélée | `private_guilds_and_bans` | non listée ; adhésion → `404` (existence non révélée) |
+| Inscrire une guilde à la découverte sans `MANAGE_GUILD` | idem | `403` |
+| Adhérer sans jeton | idem | `401` |
+| **Banni** rejoignant une guilde publique | idem | `403` |
+| Listing + adhésion directe (opt-in) | `listing_and_direct_join` | `200`, membre ensuite |
+
+Défenses (`routes_discovery.rs`) : l'annuaire n'expose **que** les guildes `discoverable = 1` (opt-in explicite, basculé via `MANAGE_GUILD`) ; l'adhésion vérifie la découvrabilité (sinon `404`, sans révéler l'existence d'une guilde privée) **et** le bannissement ; recherche `LIKE` **paramétrée** (pas d'injection) ; `GUILD_MEMBER_ADD` émis en portée guilde uniquement à l'insertion effective.
+
 ---
-*Document vivant — revue effectuée pour S1 → S18 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N), E2EE DAVE/MLS et son audit, rate-limiting (R1/R6), RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S20 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, rate-limiting (R1/R6), RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
