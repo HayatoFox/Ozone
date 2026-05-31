@@ -63,19 +63,45 @@ pub async fn register(
 ) -> AppResult<Json<TokenPair>> {
     check_gate(&st, &req.gate_token)?;
 
-    match st.instance.registration_policy {
-        RegistrationPolicy::Closed => {
-            return Err(AppError::forbidden(
-                "les inscriptions sont fermées sur cette instance",
-            ))
-        }
-        RegistrationPolicy::Invite => {
-            if req.invite_code.as_deref().unwrap_or("").is_empty() {
-                return Err(AppError::forbidden("code d'invitation d'instance requis"));
+    // Le tout premier compte (futur propriétaire) contourne la politique d'inscription.
+    let is_first = sqlx::query("SELECT 1 FROM users LIMIT 1")
+        .fetch_optional(&st.pool)
+        .await?
+        .is_none();
+    // En politique « invite », l'invitation d'instance est validée puis consommée après création.
+    let mut invite_to_consume: Option<String> = None;
+    if !is_first {
+        match st.instance.registration_policy {
+            RegistrationPolicy::Closed => {
+                return Err(AppError::forbidden(
+                    "les inscriptions sont fermées sur cette instance",
+                ))
             }
-            // TODO(phase 5) : valider le code contre instance_invites.
+            RegistrationPolicy::Invite => {
+                let code = req.invite_code.as_deref().unwrap_or("").trim().to_string();
+                if code.is_empty() {
+                    return Err(AppError::forbidden("code d'invitation d'instance requis"));
+                }
+                let row = sqlx::query(
+                    "SELECT max_uses, uses, expires_at FROM instance_invites WHERE code = ?",
+                )
+                .bind(&code)
+                .fetch_optional(&st.pool)
+                .await?
+                .ok_or_else(|| AppError::forbidden("invitation d'instance invalide"))?;
+                if let Some(exp) = row.get::<Option<i64>, _>("expires_at") {
+                    if exp < now_ms() {
+                        return Err(AppError::forbidden("invitation d'instance expirée"));
+                    }
+                }
+                let max_uses: i64 = row.get("max_uses");
+                if max_uses > 0 && row.get::<i64, _>("uses") >= max_uses {
+                    return Err(AppError::forbidden("invitation d'instance épuisée"));
+                }
+                invite_to_consume = Some(code);
+            }
+            RegistrationPolicy::Open => {}
         }
-        RegistrationPolicy::Open => {}
     }
 
     let username = req.username.trim().to_lowercase();
@@ -130,6 +156,13 @@ pub async fn register(
         tracing::info!("Compte propriétaire de l'instance créé : « {} »", username);
     }
 
+    if let Some(code) = invite_to_consume {
+        let _ = sqlx::query("UPDATE instance_invites SET uses = uses + 1 WHERE code = ?")
+            .bind(&code)
+            .execute(&st.pool)
+            .await;
+    }
+
     Ok(Json(issue_tokens(&st, id).await?))
 }
 
@@ -140,17 +173,22 @@ pub async fn login(
 ) -> AppResult<Json<TokenPair>> {
     check_gate(&st, &req.gate_token)?;
     let login = req.login.trim();
-    let row = sqlx::query("SELECT id, password_hash FROM users WHERE username = ? OR email = ?")
-        .bind(login.to_lowercase())
-        .bind(login.to_lowercase())
-        .fetch_optional(&st.pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT id, password_hash, suspended FROM users WHERE username = ? OR email = ?",
+    )
+    .bind(login.to_lowercase())
+    .bind(login.to_lowercase())
+    .fetch_optional(&st.pool)
+    .await?;
     let Some(row) = row else {
         return Err(AppError::unauthorized("identifiants invalides"));
     };
     let hash: String = row.get("password_hash");
     if !crypto::verify_password(&req.password, &hash) {
         return Err(AppError::unauthorized("identifiants invalides"));
+    }
+    if row.get::<i64, _>("suspended") != 0 {
+        return Err(AppError::forbidden("compte suspendu"));
     }
     let id = Snowflake::from_i64(row.get::<i64, _>("id"));
     Ok(Json(issue_tokens(&st, id).await?))
@@ -162,19 +200,30 @@ pub async fn refresh(
     Json(req): Json<RefreshRequest>,
 ) -> AppResult<Json<TokenPair>> {
     let hash = crypto::sha256_hex(&req.refresh_token);
-    let row = sqlx::query("SELECT id, user_id, expires_at FROM sessions WHERE refresh_hash = ?")
-        .bind(&hash)
-        .fetch_optional(&st.pool)
-        .await?;
+    let row = sqlx::query(
+        "SELECT s.id, s.user_id, s.expires_at, u.suspended \
+         FROM sessions s JOIN users u ON u.id = s.user_id WHERE s.refresh_hash = ?",
+    )
+    .bind(&hash)
+    .fetch_optional(&st.pool)
+    .await?;
     let Some(row) = row else {
         return Err(AppError::unauthorized("refresh token invalide"));
     };
+    let user_id = Snowflake::from_i64(row.get::<i64, _>("user_id"));
+    // Un compte suspendu ne peut pas renouveler ses jetons : on révoque toutes ses sessions.
+    if row.get::<i64, _>("suspended") != 0 {
+        sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+            .bind(user_id.as_i64())
+            .execute(&st.pool)
+            .await?;
+        return Err(AppError::forbidden("compte suspendu"));
+    }
     let expires_at: i64 = row.get("expires_at");
     if expires_at < now_ms() {
         return Err(AppError::unauthorized("session expirée"));
     }
     let sid: i64 = row.get("id");
-    let user_id = Snowflake::from_i64(row.get::<i64, _>("user_id"));
     sqlx::query("DELETE FROM sessions WHERE id = ?")
         .bind(sid)
         .execute(&st.pool)

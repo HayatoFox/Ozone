@@ -45,7 +45,8 @@
 | **R1** | Moyenne | **Pas de rate-limiting** (login, création d'invitations, envoi de messages, gate). Brute-force et spam possibles. | Couche de rate-limit Redis (token bucket) — cf. [docs/04-api-rest.md](04-api-rest.md#2-rate-limiting) ; à implémenter avant exposition publique. |
 | **R2** | Faible | **Énumération de comptes** : `register` distingue « pseudo/e-mail déjà utilisé ». | Message générique + vérification par e-mail (slice comptes/anti-abus). |
 | **R3** | Faible | **Politique de mot de passe** minimale (≥ 8). | zxcvbn + liste HIBP (slice comptes). |
-| **R4** | Info | `join_invite` ne vérifie pas un **bannissement** (les bans arrivent en S6). | Contrôle de ban au join (S6 — modération). |
+| **R4** | ~~Info~~ **Résolu (S6b)** | ~~`join_invite` ne vérifie pas un **bannissement**~~. | Contrôle de ban ajouté dans `join_invite` (cf. §10). |
+| **R5** | Faible | **Course sur le quota d'invitation d'instance** : la vérification `uses < max_uses` et la consommation `uses + 1` ne sont pas atomiques (deux statements séparés). Deux inscriptions concurrentes avec la même invitation à usage unique pourraient dépasser le quota de 1. | Consommation atomique via `UPDATE … WHERE uses < max_uses` à l'intérieur d'une transaction `BEGIN IMMEDIATE` (passe de durcissement transactionnel de `register`). Risque réel faible : scénario de bootstrap self-host, très faible concurrence sur la rédemption. |
 
 ## 4. Comment rejouer
 
@@ -142,5 +143,24 @@ Cœur couplé par le mainteneur (enforcement dans l'envoi de message et la jonct
 
 Enforcement vérifié (`moderation.rs`) : un **banni** ne peut pas rejoindre (contrôle dans `join_invite`) ni écrire (plus membre) ; un membre **en timeout** ne peut pas envoyer de message (contrôle `communication_disabled_until` dans `create_message`) ; toutes les actions (ban/unban/kick/timeout) sont tracées dans le **journal d'audit**.
 
+## 11. S6c — Administration d'instance (rôles, suspension, invitations d'instance)
+
+Tableau de bord du self-hoster : config d'instance, **invitations d'instance** (politique `invite`), **rôles d'instance** (owner/admin/moderator/user) et **suspension** de comptes. Cœur écrit et audité par le mainteneur. **Aucune faille exploitable** ; un risque résiduel de faible sévérité identifié (R5, course sur le quota d'invitation).
+
+| Vecteur testé | Test (`security_s6c.rs`) | Résultat |
+|---|---|---|
+| Non-admin accède à `/instance/admin/*` (config, invitations, comptes) | `admin_endpoints_require_admin` | `403` |
+| Admin (non-propriétaire) gère les rôles | `only_owner_manages_roles_and_owner_is_protected` | `403` (réservé au propriétaire) |
+| Suspendre le **propriétaire** | idem | `403` |
+| Modifier le rôle du **propriétaire** (même par lui-même) | idem | `403` (rôle immuable) |
+| Promouvoir le rôle **`owner`** | idem | `400` (non attribuable) |
+
+Défenses (`routes_instance_admin.rs` + `routes_auth.rs`) :
+- **Étagement des gardes** : lecture/invitations/suspension → `require_instance_admin` ; attribution de rôle → `require_instance_owner` (strict).
+- **Propriétaire protégé** : ni suspension, ni modification de rôle (vérif `instance_role(target) == "owner"`), et `owner` n'est pas une valeur attribuable (liste blanche `admin | moderator | user`).
+- **Bootstrap sûr** : seul le **tout premier** compte contourne la politique d'inscription (`is_first` ⇔ table `users` vide) et devient `owner` ; tout compte ultérieur est soumis à la politique (`open` / `invite` / `closed`).
+- **Inscription sur invitation** : l'invitation d'instance est validée (existence, non-expiration, `uses < max_uses`) **avant** création puis consommée après — cf. **R5** pour la limite de concurrence sur le quota.
+- **Suspension effective** : `login` lit la colonne `suspended` et refuse la connexion (`403`). **F7 (corrigée à la revue)** : `refresh` ne vérifiait pas la suspension — un compte suspendu pouvait régénérer indéfiniment des jetons d'accès via la rotation du refresh token, contournant totalement la suspension. Corrigé sur deux niveaux : (1) la suspension **révoque immédiatement** toutes les sessions du compte (`DELETE FROM sessions`), et (2) `refresh` rejette tout renouvellement pour un compte suspendu (et purge ses sessions). Le jeton d'accès déjà émis reste valide jusqu'à sa **TTL de 10 min** (fenêtre acceptée). Régression couverte par `suspension_revokes_token_renewal`.
+
 ---
-*Document vivant — revue effectuée pour S1 → S6b ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S6c ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), révocation de sessions à la suspension, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*

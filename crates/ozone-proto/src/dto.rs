@@ -521,3 +521,42 @@ pub struct AuditLogEntry {
     pub reason: Option<String>,
     pub created_at: u64,
 }
+
+// ──────────────────────────── Administration d'instance ────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstanceInvite {
+    pub code: String,
+    pub created_by: Snowflake,
+    pub uses: i32,
+    pub max_uses: i32,
+    pub expires_at: Option<u64>,
+    pub created_at: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CreateInstanceInvite {
+    #[serde(default)]
+    pub max_uses: i32,
+    /// Durée de validité en secondes (0 = jamais).
+    #[serde(default)]
+    pub max_age: i64,
+}
+
+/// Vue admin d'un compte de l'instance.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct InstanceUserView {
+    pub user: User,
+    pub role: String,
+    pub suspended: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetInstanceRole {
+    pub role: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SetSuspended {
+    pub suspended: bool,
+}

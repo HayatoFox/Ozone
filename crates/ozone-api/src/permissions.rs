@@ -318,3 +318,35 @@ pub async fn require_expression_manage(
         "permissions insuffisantes pour gérer cette expression",
     ))
 }
+
+/// Rôle d'instance d'un utilisateur (`owner` / `admin` / `moderator` / `user`).
+pub async fn instance_role(pool: &SqlitePool, user_id: i64) -> AppResult<String> {
+    let row = sqlx::query("SELECT role FROM instance_roles WHERE user_id = ?")
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row
+        .map(|r| r.get::<String, _>("role"))
+        .unwrap_or_else(|| "user".to_string()))
+}
+
+/// Exige le rôle d'instance `owner` ou `admin`.
+pub async fn require_instance_admin(pool: &SqlitePool, user_id: i64) -> AppResult<()> {
+    let role = instance_role(pool, user_id).await?;
+    if role == "owner" || role == "admin" {
+        Ok(())
+    } else {
+        Err(AppError::forbidden(
+            "réservé aux administrateurs de l'instance",
+        ))
+    }
+}
+
+/// Exige le rôle d'instance `owner`.
+pub async fn require_instance_owner(pool: &SqlitePool, user_id: i64) -> AppResult<()> {
+    if instance_role(pool, user_id).await? == "owner" {
+        Ok(())
+    } else {
+        Err(AppError::forbidden("réservé au propriétaire de l'instance"))
+    }
+}

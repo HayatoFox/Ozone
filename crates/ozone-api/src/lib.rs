@@ -15,6 +15,7 @@ pub mod routes_dms;
 pub mod routes_emojis;
 pub mod routes_guild;
 pub mod routes_instance;
+pub mod routes_instance_admin;
 pub mod routes_messages;
 pub mod routes_moderation;
 pub mod routes_relationships;
@@ -24,7 +25,7 @@ pub mod routes_stickers;
 pub mod state;
 pub mod util;
 
-use axum::routing::{get, patch, post, put};
+use axum::routing::{delete, get, patch, post, put};
 use axum::Router;
 use config::Config;
 use state::AppState;
@@ -38,6 +39,31 @@ pub fn build_app(state: AppState) -> Router {
         .route("/instance", get(routes_instance::get_instance))
         .route("/instance/health", get(routes_instance::health))
         .route("/instance/gate", post(routes_instance::gate))
+        // Administration d'instance (self-hoster)
+        .route(
+            "/instance/admin/config",
+            get(routes_instance_admin::get_config),
+        )
+        .route(
+            "/instance/admin/invites",
+            get(routes_instance_admin::list_invites).post(routes_instance_admin::create_invite),
+        )
+        .route(
+            "/instance/admin/invites/:code",
+            delete(routes_instance_admin::revoke_invite),
+        )
+        .route(
+            "/instance/admin/users",
+            get(routes_instance_admin::list_users),
+        )
+        .route(
+            "/instance/admin/users/:user_id",
+            patch(routes_instance_admin::set_suspended),
+        )
+        .route(
+            "/instance/admin/users/:user_id/role",
+            put(routes_instance_admin::set_role),
+        )
         // Authentification
         .route("/auth/register", post(routes_auth::register))
         .route("/auth/login", post(routes_auth::login))
