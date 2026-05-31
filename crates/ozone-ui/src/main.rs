@@ -10,6 +10,7 @@ use app::App;
 
 fn main() -> iced::Result {
     iced::application("Ozone", App::update, App::view)
+        .subscription(App::subscription)
         .theme(App::theme)
         .run_with(App::new)
 }

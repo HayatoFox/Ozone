@@ -9,11 +9,18 @@
 //! résultats périmés après un changement d'instance). L'état affichable vit dans `App`. Le rendu
 //! n'exécute jamais le contenu : tout est affiché en **texte brut** (aucune exécution côté UI).
 
+use iced::futures::{SinkExt, Stream};
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Element, Length, Task, Theme};
+use iced::{Element, Length, Subscription, Task, Theme};
 use ozone_core::proto::dto::{Channel, Guild, InstanceInfo, Message as ChatMessage, TokenPair};
+use ozone_core::proto::gateway::GatewayFrame;
 use ozone_core::proto::Snowflake;
 use ozone_core::{ApiClient, InstanceRef};
+
+/// Extrait un identifiant (string → i64) d'un champ d'une trame Gateway.
+fn frame_id(d: &serde_json::Value, key: &str) -> Option<i64> {
+    d.get(key)?.as_str()?.parse::<i64>().ok()
+}
 
 /// Événements de l'UI (entrées utilisateur + résultats des `Task`, étiquetés par index d'instance).
 ///
@@ -43,6 +50,8 @@ pub enum Message {
     ComposerChanged(String),
     SendMessage,
     MessageSent(usize, Result<Box<ChatMessage>, String>),
+    /// Événement temps réel reçu de la Gateway de l'instance courante.
+    GatewayEvent(Box<GatewayFrame>),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -62,6 +71,8 @@ struct Instance {
     gated: bool,
     api: ApiClient,
     authed: bool,
+    /// Jeton d'accès (conservé pour alimenter l'abonnement Gateway temps réel).
+    token: Option<String>,
 }
 
 /// État de l'application.
@@ -130,6 +141,7 @@ impl App {
             gated,
             api: ApiClient::new(base),
             authed: false,
+            token: None,
         });
         self.instances.len() - 1
     }
@@ -234,7 +246,8 @@ impl App {
             }
             Message::Authenticated(idx, Ok(tokens)) => {
                 if let Some(inst) = self.instances.get_mut(idx) {
-                    inst.api.set_token(Some(tokens.access_token));
+                    inst.api.set_token(Some(tokens.access_token.clone()));
+                    inst.token = Some(tokens.access_token); // pour l'abonnement Gateway
                     inst.authed = true;
                 }
                 self.current = Some(idx);
@@ -386,6 +399,56 @@ impl App {
                 self.status = format!("Envoi : {e}");
                 Task::none()
             }
+            Message::GatewayEvent(frame) => {
+                self.apply_gateway(&frame);
+                Task::none()
+            }
+        }
+    }
+
+    /// Applique un événement Gateway au fil affiché (salon courant uniquement).
+    /// Déduplique par identifiant (l'écho d'un message envoyé optimiste ne crée pas de doublon).
+    fn apply_gateway(&mut self, frame: &GatewayFrame) {
+        let Some(t) = frame.t.as_deref() else {
+            return;
+        };
+        let Some(d) = frame.d.as_ref() else {
+            return;
+        };
+        match t {
+            "MESSAGE_CREATE" | "MESSAGE_UPDATE" => {
+                if let Ok(m) = serde_json::from_value::<ChatMessage>(d.clone()) {
+                    if self.selected_channel == Some(m.channel_id.as_i64()) {
+                        if let Some(slot) = self.messages.iter_mut().find(|x| x.id == m.id) {
+                            *slot = m;
+                        } else {
+                            self.messages.push(m);
+                        }
+                    }
+                }
+            }
+            "MESSAGE_DELETE" => {
+                if let (Some(cid), Some(mid)) = (frame_id(d, "channel_id"), frame_id(d, "id")) {
+                    if self.selected_channel == Some(cid) {
+                        self.messages.retain(|m| m.id.as_i64() != mid);
+                    }
+                }
+            }
+            _ => {} // présence, salons, guildes : ignorés pour ce fil (à étoffer)
+        }
+    }
+
+    /// Abonnement temps réel : ouvre la Gateway de l'instance **courante authentifiée** et pousse
+    /// ses événements dans l'UI. Re-clé sur (adresse, jeton) ⇒ se relance à chaque (ré)auth ou
+    /// changement d'instance ; se ferme quand aucune instance authentifiée n'est sélectionnée.
+    pub fn subscription(&self) -> Subscription<Message> {
+        match self.current {
+            Some(idx) if self.instances[idx].authed => {
+                let base = self.instances[idx].address.clone();
+                let token = self.instances[idx].token.clone().unwrap_or_default();
+                Subscription::run_with_id(format!("gw:{base}:{token}"), gateway_stream(base, token))
+            }
+            _ => Subscription::none(),
         }
     }
 
@@ -558,6 +621,43 @@ impl App {
     }
 }
 
+/// Flux d'événements Gateway pour l'abonnement Iced : (re)connecte avec **RESUME** quand possible
+/// (rejeu des événements manqués), se termine si l'instance devient injoignable.
+fn gateway_stream(base: String, token: String) -> impl Stream<Item = Message> {
+    iced::stream::channel(64, move |mut output| async move {
+        let mut resume: Option<(String, u64)> = None;
+        loop {
+            let conn = match &resume {
+                Some((sid, seq)) => {
+                    match ozone_core::gateway::connect_resume(&base, &token, sid, *seq).await {
+                        Ok(ozone_core::gateway::Resumed::Ok(c)) => Some(c),
+                        // Session expirée/refusée ou erreur ⇒ connexion complète.
+                        _ => ozone_core::gateway_connect(&base, &token).await.ok(),
+                    }
+                }
+                None => ozone_core::gateway_connect(&base, &token).await.ok(),
+            };
+            let Some(mut conn) = conn else {
+                break; // instance injoignable : on arrête le flux
+            };
+            while let Some(frame) = conn.next_event().await {
+                if output
+                    .send(Message::GatewayEvent(Box::new(frame)))
+                    .await
+                    .is_err()
+                {
+                    return; // l'abonnement a été abandonné (changement d'instance / fermeture)
+                }
+            }
+            // Déconnecté : on mémorise la session pour tenter un RESUME au prochain tour.
+            resume = conn.session_id().map(|s| (s.to_string(), conn.last_seq()));
+            if resume.is_none() {
+                break;
+            }
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -613,6 +713,47 @@ mod tests {
         assert!(app.instances[0].authed);
         assert_eq!(app.screen, Screen::Main);
         assert!(app.form_password.is_empty()); // effacé après connexion
+    }
+
+    #[test]
+    fn gateway_events_update_current_channel_feed() {
+        let (mut app, _) = App::new();
+        app.selected_channel = Some(42);
+        let create = |id: u64, content: &str| {
+            Message::GatewayEvent(Box::new(GatewayFrame::dispatch(
+                "MESSAGE_CREATE",
+                serde_json::json!({
+                    "id": id.to_string(), "channel_id": "42",
+                    "author": { "id": "1", "username": "u", "display_name": null, "avatar_id": null },
+                    "content": content, "type": 0, "created_at": 1, "edited_at": null, "pinned": false
+                }),
+                id,
+            )))
+        };
+        let _ = app.update(create(1, "salut"));
+        assert_eq!(app.messages.len(), 1);
+        // Même id ⇒ mise à jour en place (pas de doublon avec l'écho optimiste).
+        let _ = app.update(create(1, "salut (édité)"));
+        assert_eq!(app.messages.len(), 1);
+        assert_eq!(app.messages[0].content, "salut (édité)");
+        // Message d'un autre salon ⇒ ignoré.
+        let _ = app.update(Message::GatewayEvent(Box::new(GatewayFrame::dispatch(
+            "MESSAGE_CREATE",
+            serde_json::json!({
+                "id": "2", "channel_id": "99",
+                "author": { "id": "1", "username": "u", "display_name": null, "avatar_id": null },
+                "content": "ailleurs", "type": 0, "created_at": 1, "edited_at": null, "pinned": false
+            }),
+            2,
+        ))));
+        assert_eq!(app.messages.len(), 1);
+        // Suppression.
+        let _ = app.update(Message::GatewayEvent(Box::new(GatewayFrame::dispatch(
+            "MESSAGE_DELETE",
+            serde_json::json!({ "id": "1", "channel_id": "42" }),
+            3,
+        ))));
+        assert!(app.messages.is_empty());
     }
 
     #[test]

@@ -579,5 +579,17 @@ Restructuration de l'UI (rail d'instances, flux d'ajout avec gate) au-dessus du 
 | Jetons au repos | (conception) | Les instances vivent **en mémoire** ; aucune persistance de jeton (la persistance éventuelle n'écrira que `to_persisted()`, sans jeton — §35). |
 | Exécution de contenu | (conception) | Rendu **texte brut** (cf. §34) — aucune exécution. |
 
+## 37. S35 — Temps réel dans l'UI (abonnement Gateway)
+
+Un abonnement Iced ouvre la Gateway de l'instance courante et pousse ses événements dans le fil. Réutilise des couches **déjà auditées** (Gateway/RESUME §31/§33). Écrit et audité par le mainteneur. **Aucune faille exploitable.** *(Validation visuelle = exécuter le binaire.)*
+
+| Vecteur examiné | Test | Posture |
+|---|---|---|
+| Portée d'application des events | `gateway_events_update_current_channel_feed` | `apply_gateway` n'applique qu'au **salon couramment ouvert** et **déduplique par id** (l'écho d'un envoi optimiste ne crée pas de doublon ; `MESSAGE_UPDATE` met à jour en place ; `MESSAGE_DELETE` retire). Les events d'un autre salon sont ignorés. |
+| Filtrage des droits | (serveur) | L'UI **fait confiance au filtrage serveur** (`should_deliver`) : elle ne reçoit que les events autorisés ; aucune ré-dérivation de droits côté client (cf. §30). |
+| Jeton dans l'abonnement | (conception) | Le jeton (de l'utilisateur lui-même) est passé **en mémoire** au flux ; l'`id` d'abonnement `(adresse, jeton)` est interne à Iced (identité d'abonnement), non journalisé. Re-clé à chaque (ré)auth ⇒ cycle de vie propre. |
+| Reconnexion | (réutilise §31/§33) | Le flux reconnecte via **RESUME** (rejeu sans perte) puis repli en connexion complète ; isolation de session garantie côté serveur (§33). |
+| Trame malformée / exécution | (conception) | `serde_json::from_value` en échec ⇒ ignoré (pas de panique) ; rendu **texte brut** (pas d'exécution, cf. §34). |
+
 ---
-*Document vivant — revue effectuée pour S1 → S34 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), temps réel dans l'UI (subscription Gateway), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S35 ; à reconduire à chaque couche. À compléter par : stockage chiffré des jetons + `zeroize` du mot de passe (UI/registre d'instances), thèmes/effets UI, présence/MP dans l'UI, plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
