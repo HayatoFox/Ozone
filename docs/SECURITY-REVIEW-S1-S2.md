@@ -67,8 +67,9 @@ cargo test -p ozone-api --test leave_guild   # S15 — quitter une guilde
 cargo test -p ozone-api --test security_s16  # intrusion S16 (signalisation vocale)
 cargo test -p ozone-sfu --test auth          # S18 — authz du plan média (SFU)
 cargo test -p ozone-api --test discovery     # S20 — découverte de guildes publiques
-cargo test -p ozone-api                       # API : suite complète (101 tests)
-cargo test --workspace                        # API + SFU + proto (108 tests)
+cargo test -p ozone-api --test polls         # S21 — sondages
+cargo test -p ozone-api                       # API : suite complète (104 tests)
+cargo test --workspace                        # API + SFU + proto (111 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -387,5 +388,18 @@ Conception :
 
 Défenses (`routes_discovery.rs`) : l'annuaire n'expose **que** les guildes `discoverable = 1` (opt-in explicite, basculé via `MANAGE_GUILD`) ; l'adhésion vérifie la découvrabilité (sinon `404`, sans révéler l'existence d'une guilde privée) **et** le bannissement ; recherche `LIKE` **paramétrée** (pas d'injection) ; `GUILD_MEMBER_ADD` émis en portée guilde uniquement à l'insertion effective.
 
+## 25. S21 — Sondages
+
+`POST /channels/:id/polls`, `GET …/polls/:mid`, `PUT …/polls/:mid/votes`. Un sondage est porté par un message du salon. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`polls.rs`) | Résultat |
+|---|---|---|
+| Créer / lire / voter en non-membre | `poll_requires_channel_access` | `403` |
+| Voter une réponse inexistante | `multiselect_and_validation` | `400` |
+| Mono-réponse : voter pour plusieurs | `create_vote_results` | `400` |
+| Décomptes corrects + changement de vote | idem | recomptés |
+
+Défenses (`routes_polls.rs`) : création gardée par `SEND_MESSAGES`, lecture/vote par `VIEW_CHANNEL` (+ `READ_MESSAGE_HISTORY` en lecture) ; le sondage est **scopé au salon** (`message_id` **et** `channel_id` — pas de vote inter-salons) ; les `answer_ids` sont **validés** contre les réponses du sondage, dédupliqués, et bornés à 1 hors multi-sélection ; vote refusé après expiration ; le vote **remplace** les votes existants de l'utilisateur (pas de bourrage) ; validations de création (question ≤ 300, 1–10 réponses ≤ 55). Tout est paramétré.
+
 ---
-*Document vivant — revue effectuée pour S1 → S20 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, rate-limiting (R1/R6), RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S21 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, rate-limiting (R1/R6), RESUME Gateway + persistance du statut, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

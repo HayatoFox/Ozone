@@ -454,6 +454,43 @@ pub async fn create_message(
     Ok(Json(msg))
 }
 
+/// Insère un message texte simple (p. ex. message porteur d'un **sondage**) et diffuse
+/// `MESSAGE_CREATE`. Renvoie le message hydraté.
+pub async fn insert_text_message(
+    st: &AppState,
+    channel_id: i64,
+    author_id: i64,
+    content: &str,
+) -> AppResult<Message> {
+    let id = st.ids.next();
+    let now = now_ms();
+    sqlx::query(
+        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, created_at, edited_at) \
+         VALUES (?, ?, ?, ?, 0, NULL, NULL, 0, ?, NULL)",
+    )
+    .bind(id.as_i64())
+    .bind(channel_id)
+    .bind(author_id)
+    .bind(content)
+    .bind(now)
+    .execute(&st.pool)
+    .await?;
+    let msg = hydrate(
+        st,
+        fetch_message_in_channel(st, channel_id, id.as_i64()).await?,
+        author_id,
+    )
+    .await?;
+    emit(
+        st,
+        channel_id,
+        "MESSAGE_CREATE",
+        serde_json::to_value(&msg).unwrap_or_default(),
+    )
+    .await;
+    Ok(msg)
+}
+
 /// Insère un message **émis par un webhook** et diffuse `MESSAGE_CREATE`.
 /// `author_id` = créateur du webhook (pour la jointure `users`) ; le nom/avatar de
 /// remplacement priment à l'affichage. Renvoie le message hydraté.

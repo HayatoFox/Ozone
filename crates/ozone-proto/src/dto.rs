@@ -808,6 +808,44 @@ pub struct SetNotificationSetting {
     pub mute_seconds: Option<i64>,
 }
 
+// ──────────────────────────────── Sondages ────────────────────────────────
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CreatePoll {
+    pub question: String,
+    pub answers: Vec<String>,
+    #[serde(default)]
+    pub multiselect: bool,
+    /// Durée en heures (défaut 24, max 768 = 32 jours). 0 = sans expiration.
+    #[serde(default)]
+    pub duration_hours: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PollAnswer {
+    pub answer_id: i32,
+    pub text: String,
+    pub vote_count: i64,
+    /// `true` si l'utilisateur courant a voté pour cette réponse.
+    pub me_voted: bool,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Poll {
+    pub message_id: Snowflake,
+    pub channel_id: Snowflake,
+    pub question: String,
+    pub multiselect: bool,
+    pub expires_at: Option<i64>,
+    pub finished: bool,
+    pub answers: Vec<PollAnswer>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CastVote {
+    pub answer_ids: Vec<i32>,
+}
+
 // ──────────────────────────── Vocal (signalisation) ────────────────────────────
 
 /// État vocal d'un utilisateur dans un salon vocal.

@@ -22,6 +22,7 @@ pub mod routes_instance_admin;
 pub mod routes_messages;
 pub mod routes_moderation;
 pub mod routes_notifications;
+pub mod routes_polls;
 pub mod routes_presence;
 pub mod routes_relationships;
 pub mod routes_roles;
@@ -160,6 +161,19 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/channels/:channel_id/typing",
             post(routes_messages::typing),
+        )
+        // Sondages
+        .route(
+            "/channels/:channel_id/polls",
+            post(routes_polls::create_poll),
+        )
+        .route(
+            "/channels/:channel_id/polls/:message_id",
+            get(routes_polls::get_poll),
+        )
+        .route(
+            "/channels/:channel_id/polls/:message_id/votes",
+            put(routes_polls::cast_vote),
         )
         // Rôles & permissions
         .route(
