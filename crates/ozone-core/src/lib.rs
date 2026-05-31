@@ -4,9 +4,11 @@
 //! le store normalisé, le cache SQLite et le moteur voix viennent ensuite
 //! (cf. `docs/01-architecture.md`, `docs/02-stack-technique.md`).
 
+pub mod cache;
 pub mod client;
 pub mod gateway;
 pub mod store;
+pub use cache::Cache;
 pub use client::ApiClient;
 pub use gateway::{connect as gateway_connect, GatewayConnection};
 pub use ozone_proto as proto;

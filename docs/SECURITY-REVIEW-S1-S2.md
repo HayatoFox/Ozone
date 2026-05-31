@@ -486,7 +486,23 @@ Première frontière de confiance **côté client**. Contrairement au serveur, `
 
 | Risque | Sévérité | État |
 |---|---|---|
-| R8 — croissance mémoire non bornée du `Store` client | Faible | Suivi → couche cache SQLite (éviction) |
+| R8 — croissance mémoire non bornée du `Store` client | Faible | **Résolu (S29)** — plafond mémoire + rétention disque |
+
+## 31. S29 — Cache local SQLite du client (`ozone-core::cache`)
+
+Persistance locale du `Store` (démarrage hors-ligne, historique). **Même `sqlx`/SQLite sans TLS** que le serveur ⇒ pas de second binding natif ; invariant « zéro `ring` » du serveur **inchangé** (vérifié : `cargo tree -p ozone-api -i ring` → aucun paquet ; `ring` reste confiné au client et au SFU). Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur examiné | Posture |
+|---|---|
+| Injection SQL | Toutes les requêtes sont **paramétrées** (`.bind`) ; le seul SQL littéral est le `SCHEMA` constant (aucune entrée utilisateur concaténée). |
+| DTO obsolète / blob corrompu → panique | Hydratation via `serde_json::from_str(...).ok()` : toute ligne **illisible est ignorée** (jamais de `unwrap`/panique) — même posture *fail-safe* que `Store::apply`. |
+| Contenu hostile stocké | Blobs **JSON inertes** ; aucune exécution, pas de rendu (XSS relève de l'UI). |
+| Traversée de chemin | Le chemin du cache est **choisi par l'application** (fichier local de l'utilisateur), pas par un attaquant distant ; les identifiants ne touchent jamais un chemin de fichier. |
+| Ré-dérivation de droits | Aucune : le cache **miroir** se fie au filtrage serveur, comme le `Store`. |
+
+**R8 — résolu.** Double borne contre la croissance non maîtrisée (DoS côté client / disque) :
+- **Mémoire** (`Store`) : plafond par salon (`DEFAULT_MESSAGE_CAP = 1000`, configurable `with_message_cap`) appliqué sur `MESSAGE_CREATE` **et** `set_messages` (éviction des plus anciens).
+- **Disque** (`Cache`) : plafond par salon (`DEFAULT_DISK_CAP = 2000`, configurable `set_disk_cap`) appliqué après chaque `MESSAGE_CREATE` persisté et à `replace_channel_messages`, plus `prune_channel_messages` explicite. Tests : rétention conserve bien les **plus récents**, suppression de salon purge les messages, round-trip persiste/réhydrate à la réouverture.
 
 ---
-*Document vivant — revue effectuée pour S1 → S28 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, éviction du cache client (R8), tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S29 ; à reconduire à chaque couche. À compléter par : renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting (R1/R6), URLs signées pour pièces jointes, RESUME Gateway, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

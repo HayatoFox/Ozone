@@ -7,9 +7,12 @@ use ozone_proto::Snowflake;
 use serde_json::Value;
 use std::collections::HashMap;
 
-fn id_field(d: &Value, key: &str) -> Option<i64> {
+pub(crate) fn id_field(d: &Value, key: &str) -> Option<i64> {
     d.get(key)?.as_str()?.parse::<i64>().ok()
 }
+
+/// Plafond par défaut de messages conservés **en mémoire** par salon (anti-OOM, cf. SECURITY §30/R8).
+pub const DEFAULT_MESSAGE_CAP: usize = 1000;
 
 /// État client d'**une** instance (multi-instances ⇒ un `Store` par instance).
 #[derive(Default)]
@@ -20,11 +23,40 @@ pub struct Store {
     pub messages: HashMap<i64, Vec<Message>>,
     /// Statut effectif par utilisateur (`online`/`idle`/`dnd`/`offline`).
     pub presences: HashMap<i64, PresenceView>,
+    /// Plafond de messages gardés **en mémoire** par salon (`0` = illimité). Borne la
+    /// croissance mémoire face à un flot d'événements ou un serveur compromis (cf. R8).
+    pub max_messages_per_channel: usize,
 }
 
 impl Store {
+    /// Store avec le plafond mémoire par défaut ([`DEFAULT_MESSAGE_CAP`]).
     pub fn new() -> Self {
-        Self::default()
+        Self {
+            max_messages_per_channel: DEFAULT_MESSAGE_CAP,
+            ..Default::default()
+        }
+    }
+
+    /// Store avec un plafond mémoire explicite par salon (`0` = illimité).
+    pub fn with_message_cap(cap: usize) -> Self {
+        Self {
+            max_messages_per_channel: cap,
+            ..Default::default()
+        }
+    }
+
+    /// Tronque le salon au plafond en mémoire en supprimant les messages **les plus anciens**.
+    fn trim_channel(&mut self, channel_id: i64) {
+        let cap = self.max_messages_per_channel;
+        if cap == 0 {
+            return;
+        }
+        if let Some(list) = self.messages.get_mut(&channel_id) {
+            if list.len() > cap {
+                let excess = list.len() - cap;
+                list.drain(0..excess);
+            }
+        }
     }
 
     // ─────────────── Ingestion REST ───────────────
@@ -41,7 +73,12 @@ impl Store {
         }
     }
 
-    pub fn set_messages(&mut self, channel_id: Snowflake, msgs: Vec<Message>) {
+    pub fn set_messages(&mut self, channel_id: Snowflake, mut msgs: Vec<Message>) {
+        let cap = self.max_messages_per_channel;
+        if cap != 0 && msgs.len() > cap {
+            let excess = msgs.len() - cap;
+            msgs.drain(0..excess); // garde les plus récents (fin de liste)
+        }
         self.messages.insert(channel_id.as_i64(), msgs);
     }
 
@@ -74,10 +111,9 @@ impl Store {
         match t {
             "MESSAGE_CREATE" => match serde_json::from_value::<Message>(d.clone()) {
                 Ok(m) => {
-                    self.messages
-                        .entry(m.channel_id.as_i64())
-                        .or_default()
-                        .push(m);
+                    let cid = m.channel_id.as_i64();
+                    self.messages.entry(cid).or_default().push(m);
+                    self.trim_channel(cid);
                     true
                 }
                 Err(_) => false,
@@ -213,5 +249,41 @@ mod tests {
         let mut s = Store::new();
         assert!(!s.apply(&GatewayFrame::new(opcode::HEARTBEAT_ACK)));
         assert!(!s.apply(&dispatch("TYPING_START", json!({ "channel_id": "1" }))));
+    }
+
+    #[test]
+    fn caps_messages_in_memory() {
+        // Plafond de 3 : au-delà, les plus anciens sont évincés (anti-OOM, R8).
+        let mut s = Store::with_message_cap(3);
+        let cid = Snowflake::from_i64(9);
+        for i in 1..=6u64 {
+            let m = json!({
+                "id": i.to_string(), "channel_id": "9",
+                "author": { "id": "1", "username": "u", "display_name": null, "avatar_id": null },
+                "content": format!("m{i}"), "type": 0, "created_at": i, "edited_at": null, "pinned": false
+            });
+            assert!(s.apply(&dispatch("MESSAGE_CREATE", m)));
+        }
+        let kept = s.messages_of(cid);
+        assert_eq!(kept.len(), 3, "plafonné à 3");
+        // Les 3 plus récents (m4,m5,m6) sont conservés, dans l'ordre.
+        assert_eq!(kept[0].content, "m4");
+        assert_eq!(kept[2].content, "m6");
+
+        // set_messages respecte aussi le plafond (garde les plus récents).
+        let many: Vec<_> = (1..=5u64)
+            .map(|i| {
+                serde_json::from_value(json!({
+                    "id": i.to_string(), "channel_id": "9",
+                    "author": { "id": "1", "username": "u", "display_name": null, "avatar_id": null },
+                    "content": format!("x{i}"), "type": 0, "created_at": i, "edited_at": null, "pinned": false
+                }))
+                .unwrap()
+            })
+            .collect();
+        s.set_messages(cid, many);
+        let kept = s.messages_of(cid);
+        assert_eq!(kept.len(), 3);
+        assert_eq!(kept[0].content, "x3");
     }
 }
