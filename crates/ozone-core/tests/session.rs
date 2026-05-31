@@ -204,6 +204,61 @@ async fn session_resume_replays_events_missed_during_outage() {
 }
 
 #[tokio::test]
+async fn poll_event_resilient_auto_resumes_after_drop() {
+    let base = spawn_server().await;
+    let mut sess = Session::new(InstanceRef::new(&base));
+    sess.register("iris", "iris@s.fr", "motdepasse")
+        .await
+        .expect("register");
+    let _g = sess.api.create_guild("Auto").await.expect("guild");
+    sess.bootstrap().await.expect("bootstrap");
+    let cid = sess.store.channels.values().next().expect("salon").id;
+    sess.connect_gateway().await.expect("gateway");
+    sess.open_channel(cid).await.expect("open");
+
+    // Consomme un premier message via le poll auto-cicatrisant.
+    sess.send_message(cid, "one").await.expect("send one");
+    wait_for_resilient(&mut sess, "one").await;
+
+    // Coupure brutale, puis message pendant la coupure.
+    sess.abort_gateway();
+    sess.send_message(cid, "two").await.expect("send two");
+
+    // Le poll résilient doit reconnecter tout seul et livrer le message.
+    wait_for_resilient(&mut sess, "two").await;
+    assert!(sess.is_realtime(), "reconnecté automatiquement");
+}
+
+/// Comme `wait_for_message` mais via `poll_event_resilient` (auto-reconnexion).
+async fn wait_for_resilient(sess: &mut Session, content: &str) {
+    for _ in 0..50 {
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            sess.poll_event_resilient(),
+        )
+        .await
+        {
+            Ok(Some(ev)) => {
+                if ev.kind() == Some("MESSAGE_CREATE")
+                    && ev
+                        .frame
+                        .d
+                        .as_ref()
+                        .and_then(|d| d.get("content"))
+                        .and_then(|v| v.as_str())
+                        == Some(content)
+                {
+                    return;
+                }
+            }
+            Ok(None) => break,
+            Err(_) => break,
+        }
+    }
+    panic!("événement attendu '{content}' non reçu (poll résilient)");
+}
+
+#[tokio::test]
 async fn resume_rejects_another_users_session() {
     let base = spawn_server().await;
 

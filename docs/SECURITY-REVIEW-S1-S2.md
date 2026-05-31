@@ -534,6 +534,8 @@ Reconnexion après coupure **sans re-IDENTIFY ni perte d'événement** : chaque 
 
 **Présence durcie au passage** : la présence est désormais liée au **cycle de vie de l'acteur** (et non du socket brut) ⇒ une micro-coupure suivie d'un RESUME **ne fait plus clignoter** le statut en/hors ligne ; le passage hors ligne + nettoyage vocal n'a lieu qu'à l'expiration de la grâce (60 s).
 
+**Reconnexion auto** (`Session::poll_event_resilient`) : pure orchestration de primitives **déjà auditées** (`connect`/`connect_resume`/`refresh_session`) — aucune nouvelle surface. Boucle de reconnexion **bornée** (`MAX_ATTEMPTS = 5`) avec back-off, pour ne pas marteler un serveur injoignable. Testé (coupure → auto-reprise → livraison de l'événement manqué).
+
 | Risque | Sévérité | État |
 |---|---|---|
 | R9 — accumulation d'acteurs de session pendant la grâce (connexions/déconnexions rapides) | Faible | Suivi → plafond de sessions par utilisateur + rate-limit IDENTIFY (futur) |

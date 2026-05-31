@@ -19,6 +19,7 @@ use ozone_proto::dto::{Guild, TokenPair};
 use ozone_proto::gateway::GatewayFrame;
 use ozone_proto::Snowflake;
 use serde_json::Value;
+use std::time::Duration;
 
 /// Résultat de l'application d'un événement Gateway au `Store` (et au cache).
 pub struct EventOutcome {
@@ -194,6 +195,35 @@ impl Session {
             let _ = c.apply(&frame).await;
         }
         Some(EventOutcome { changed, frame })
+    }
+
+    /// Variante **auto-cicatrisante** de [`Session::poll_event`] : si le flux Gateway s'est fermé,
+    /// tente automatiquement un RESUME (puis une reconnexion complète) avec back-off borné, en
+    /// rafraîchissant le jeton au besoin, puis reprend la livraison. Ne renvoie `None` que si la
+    /// reconnexion échoue durablement (serveur injoignable, session non authentifiée…).
+    pub async fn poll_event_resilient(&mut self) -> Option<EventOutcome> {
+        const MAX_ATTEMPTS: u32 = 5;
+        loop {
+            if let Some(ev) = self.poll_event().await {
+                return Some(ev);
+            }
+            // Flux fermé : on retente jusqu'à MAX_ATTEMPTS (le compteur repart à chaque succès).
+            let mut attempt = 0u32;
+            loop {
+                attempt += 1;
+                if attempt > MAX_ATTEMPTS {
+                    return None;
+                }
+                match self.reconnect().await {
+                    Ok(_) => break, // reconnecté → on repart pomper
+                    Err(_) => {
+                        // Le jeton a peut-être expiré : on tente un rafraîchissement, puis back-off.
+                        let _ = self.refresh_session().await;
+                        tokio::time::sleep(Duration::from_millis(100 * attempt as u64)).await;
+                    }
+                }
+            }
+        }
     }
 
     // ─────────────── Chargement REST + cache ───────────────

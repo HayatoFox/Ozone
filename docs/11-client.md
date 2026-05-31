@@ -25,7 +25,7 @@ ozone-core    logique client multiplateforme :
               - GatewayClient (WS temps réel + RESUME)         ← fait (S27/S31 ; reprise sans perte après coupure, testé E2E)
               - Store normalisé (guildes/salons/messages/présence)  ← fait (S28 ; applique les events Gateway, testé)
               - Cache local (SQLite + rétention bornée)         ← fait (S29 ; persiste/réhydrate, plafonds mémoire+disque, testé)
-              - Session (orchestrateur : auth+bootstrap+temps réel+cache)  ← fait (S30 ; API haut niveau pour l'UI, testé E2E)
+              - Session (orchestrateur : auth+bootstrap+temps réel+cache+reconnexion auto)  ← fait (S30/S31 ; API haut niveau pour l'UI, testé E2E)
               - Moteur vocal (signalisation + WebRTC client)   ← à faire (pair du SFU)
 ozone-ui      application Iced (vues, thèmes, navigation)      ← à faire
 ```
@@ -45,5 +45,7 @@ reverse-proxy peut exposer l'API sous un préfixe (l'inclure alors dans l'adress
    liste guildes/salons, fil de messages (alimenté par le `Store`/cache), MP, présence, paramètres/thèmes.
    *(Nécessite un environnement graphique pour itérer/valider visuellement.)*
 2. Moteur vocal client (signalisation via l'API → SFU `ozone-sfu`).
-3. Reconnexion automatique : boucle qui appelle `Session::reconnect()` quand le flux se ferme
-   (back-off), avec rafraîchissement du jeton (`refresh_session`) si nécessaire.
+   *(Le plan de contrôle — jeton vocal + jointure SFU — est testable ; le média WebRTC nécessite de vrais pairs.)*
+
+> Reconnexion automatique : **fait (S31)** via `Session::poll_event_resilient()` (RESUME → repli
+> connexion complète, back-off borné, `refresh_session` au besoin). Testé E2E (coupure → auto-reprise).
