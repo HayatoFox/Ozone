@@ -9,7 +9,9 @@ use crate::state::{AppState, EventScope, HubEvent};
 use crate::util::parse_i64;
 use axum::extract::{Path, Query, State};
 use axum::Json;
-use ozone_proto::dto::{BulkDelete, CreateMessage, EditMessage, Message, Reaction, User};
+use ozone_proto::dto::{
+    BulkDelete, CreateMessage, EditMessage, Message, Reaction, SearchResponse, User,
+};
 use ozone_proto::{perms, Snowflake};
 use serde::Deserialize;
 use serde_json::json;
@@ -21,7 +23,9 @@ const MAX_PINS: i64 = 250;
 
 const MSG_SELECT: &str =
     "SELECT m.id, m.channel_id, m.author_id, m.content, m.type AS kind, m.nonce, \
-     m.created_at, m.edited_at, m.reference_id, m.pinned, u.username, u.display_name, u.avatar_id \
+     m.created_at, m.edited_at, m.reference_id, m.pinned, m.webhook_id, \
+     m.author_name AS wh_name, m.author_avatar AS wh_avatar, \
+     u.username, u.display_name, u.avatar_id \
      FROM messages m JOIN users u ON u.id = m.author_id";
 
 async fn emit(st: &AppState, channel_id: i64, t: &str, d: serde_json::Value) {
@@ -41,14 +45,28 @@ async fn emit(st: &AppState, channel_id: i64, t: &str, d: serde_json::Value) {
 }
 
 fn row_to_message_basic(r: SqliteRow) -> Message {
+    let webhook_id = r
+        .get::<Option<i64>, _>("webhook_id")
+        .map(Snowflake::from_i64);
+    // Pour un message de webhook, le nom/avatar de remplacement priment sur ceux de l'auteur réel.
+    let wh_name: Option<String> = r.get("wh_name");
+    let wh_avatar: Option<String> = r.get("wh_avatar");
+    let (display_name, avatar_id) = if webhook_id.is_some() {
+        (
+            wh_name.or_else(|| r.get("display_name")),
+            wh_avatar.or_else(|| r.get("avatar_id")),
+        )
+    } else {
+        (r.get("display_name"), r.get("avatar_id"))
+    };
     Message {
         id: Snowflake::from_i64(r.get::<i64, _>("id")),
         channel_id: Snowflake::from_i64(r.get::<i64, _>("channel_id")),
         author: User {
             id: Snowflake::from_i64(r.get::<i64, _>("author_id")),
             username: r.get("username"),
-            display_name: r.get("display_name"),
-            avatar_id: r.get("avatar_id"),
+            display_name,
+            avatar_id,
             email: None,
         },
         content: r.get("content"),
@@ -62,6 +80,7 @@ fn row_to_message_basic(r: SqliteRow) -> Message {
             .map(Snowflake::from_i64),
         referenced_message: None,
         nonce: r.get("nonce"),
+        webhook_id,
     }
 }
 
@@ -335,6 +354,50 @@ pub async fn create_message(
     )
     .await;
     Ok(Json(msg))
+}
+
+/// Insère un message **émis par un webhook** et diffuse `MESSAGE_CREATE`.
+/// `author_id` = créateur du webhook (pour la jointure `users`) ; le nom/avatar de
+/// remplacement priment à l'affichage. Renvoie le message hydraté.
+pub async fn insert_webhook_message(
+    st: &AppState,
+    channel_id: i64,
+    webhook_id: i64,
+    author_id: i64,
+    name_override: Option<&str>,
+    avatar_override: Option<&str>,
+    content: &str,
+) -> AppResult<Message> {
+    let id = st.ids.next();
+    let now = now_ms();
+    sqlx::query(
+        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, webhook_id, author_name, author_avatar, created_at, edited_at) \
+         VALUES (?, ?, ?, ?, 0, NULL, NULL, 0, ?, ?, ?, ?, NULL)",
+    )
+    .bind(id.as_i64())
+    .bind(channel_id)
+    .bind(author_id)
+    .bind(content)
+    .bind(webhook_id)
+    .bind(name_override)
+    .bind(avatar_override)
+    .bind(now)
+    .execute(&st.pool)
+    .await?;
+    let msg = hydrate(
+        st,
+        fetch_message_in_channel(st, channel_id, id.as_i64()).await?,
+        author_id,
+    )
+    .await?;
+    emit(
+        st,
+        channel_id,
+        "MESSAGE_CREATE",
+        serde_json::to_value(&msg).unwrap_or_default(),
+    )
+    .await;
+    Ok(msg)
 }
 
 /// `PATCH /channels/:channel_id/messages/:message_id`
@@ -624,4 +687,197 @@ pub async fn typing(
     )
     .await;
     Ok(Json(json!({ "ok": true })))
+}
+
+// ───────────────────────────── Recherche (FTS5) ─────────────────────────────
+
+#[derive(Debug, Deserialize)]
+pub struct SearchQuery {
+    /// Texte recherché (plein-texte). Vide = pas de filtre textuel.
+    q: Option<String>,
+    /// Restreindre à un salon (recherche de guilde).
+    channel_id: Option<String>,
+    author_id: Option<String>,
+    /// `link` = messages contenant un lien (autres valeurs : non encore indexées → 0 résultat).
+    has: Option<String>,
+    pinned: Option<bool>,
+    before: Option<String>,
+    after: Option<String>,
+    /// Tri : `recent` (défaut) | `old` | `relevance` (avec `q`).
+    sort: Option<String>,
+    limit: Option<i64>,
+    offset: Option<i64>,
+}
+
+/// Transforme le texte utilisateur en requête FTS5 sûre (chaque terme est une phrase entre
+/// guillemets ⇒ aucun opérateur FTS injectable, aucune erreur de syntaxe). `None` si vide.
+fn fts_query(q: &str) -> Option<String> {
+    let terms: Vec<String> = q
+        .split_whitespace()
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect();
+    if terms.is_empty() {
+        None
+    } else {
+        Some(terms.join(" "))
+    }
+}
+
+/// Identifiants des salons d'une guilde que l'utilisateur peut **lire** (VIEW + historique).
+async fn viewable_channel_ids(
+    st: &AppState,
+    guild_id: i64,
+    owner_id: i64,
+    user_id: i64,
+) -> AppResult<Vec<i64>> {
+    let rows = sqlx::query("SELECT id FROM channels WHERE guild_id = ?")
+        .bind(guild_id)
+        .fetch_all(&st.pool)
+        .await?;
+    let mut ids = Vec::new();
+    for r in rows {
+        let cid = r.get::<i64, _>("id");
+        let p = pg::channel_permissions(&st.pool, guild_id, owner_id, cid, user_id).await?;
+        if perms::has(p, perms::VIEW_CHANNEL | perms::READ_MESSAGE_HISTORY) {
+            ids.push(cid);
+        }
+    }
+    Ok(ids)
+}
+
+/// Exécute la recherche sur un ensemble de salons **déjà autorisés**.
+async fn run_search(
+    st: &AppState,
+    channel_ids: &[i64],
+    q: &SearchQuery,
+    user_id: i64,
+) -> AppResult<SearchResponse> {
+    if channel_ids.is_empty() {
+        return Ok(SearchResponse {
+            total: 0,
+            messages: Vec::new(),
+        });
+    }
+    // `has` non pris en charge (hors `link`) : aucune pièce jointe indexée pour l'instant.
+    let has_link = match q.has.as_deref() {
+        None => None,
+        Some("link") => Some(true),
+        Some(_) => {
+            return Ok(SearchResponse {
+                total: 0,
+                messages: Vec::new(),
+            })
+        }
+    };
+    let fts = q.q.as_deref().and_then(fts_query);
+    let id_list = channel_ids
+        .iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+
+    // Filtres entiers : validés en i64 (donc sûrs à interpoler). Le texte FTS est **lié**.
+    let mut filters = format!(" WHERE m.channel_id IN ({id_list})");
+    if fts.is_some() {
+        filters.push_str(" AND messages_fts MATCH ?");
+    }
+    if let Some(a) = &q.author_id {
+        filters.push_str(&format!(" AND m.author_id = {}", parse_i64(a)?));
+    }
+    if let Some(b) = &q.before {
+        filters.push_str(&format!(" AND m.id < {}", parse_i64(b)?));
+    }
+    if let Some(a) = &q.after {
+        filters.push_str(&format!(" AND m.id > {}", parse_i64(a)?));
+    }
+    match q.pinned {
+        Some(true) => filters.push_str(" AND m.pinned = 1"),
+        Some(false) => filters.push_str(" AND m.pinned = 0"),
+        None => {}
+    }
+    if has_link.is_some() {
+        filters.push_str(" AND m.content LIKE '%http%'");
+    }
+    let join_fts = if fts.is_some() {
+        " JOIN messages_fts ON messages_fts.rowid = m.id"
+    } else {
+        ""
+    };
+
+    // Total (mêmes filtres, sans tri ni pagination).
+    let count_sql = format!("SELECT COUNT(*) AS c FROM messages m{join_fts}{filters}");
+    let mut cq = sqlx::query(&count_sql);
+    if let Some(f) = &fts {
+        cq = cq.bind(f);
+    }
+    let total: i64 = cq.fetch_one(&st.pool).await?.get("c");
+
+    let order = match q.sort.as_deref() {
+        Some("old") => " ORDER BY m.id ASC",
+        Some("relevance") if fts.is_some() => " ORDER BY messages_fts.rank",
+        _ => " ORDER BY m.id DESC",
+    };
+    let limit = q.limit.unwrap_or(25).clamp(1, 50);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let sql = format!("{MSG_SELECT}{join_fts}{filters}{order} LIMIT {limit} OFFSET {offset}");
+    let mut query = sqlx::query(&sql);
+    if let Some(f) = &fts {
+        query = query.bind(f);
+    }
+    let rows = query.fetch_all(&st.pool).await?;
+    let mut msgs: Vec<Message> = rows.into_iter().map(row_to_message_basic).collect();
+    let ids: Vec<i64> = msgs.iter().map(|m| m.id.as_i64()).collect();
+    let reactions = load_reactions(st, &ids, user_id).await?;
+    for m in &mut msgs {
+        if let Some(rs) = reactions.get(&m.id.as_i64()) {
+            m.reactions = rs.clone();
+        }
+    }
+    Ok(SearchResponse {
+        total,
+        messages: msgs,
+    })
+}
+
+/// `GET /guilds/:guild_id/messages/search` — recherche sur toute la guilde, filtrée par permissions.
+pub async fn search_guild(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(gid): Path<String>,
+    Query(q): Query<SearchQuery>,
+) -> AppResult<Json<SearchResponse>> {
+    let gid = parse_i64(&gid)?;
+    pg::require_guild_member(&st.pool, gid, user.id.as_i64()).await?;
+    let owner = pg::guild_owner(&st.pool, gid)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let mut channels = viewable_channel_ids(&st, gid, owner, user.id.as_i64()).await?;
+    // Restriction facultative à un salon (qui doit être dans l'ensemble autorisé).
+    if let Some(c) = &q.channel_id {
+        let target = parse_i64(c)?;
+        channels.retain(|&id| id == target);
+    }
+    Ok(Json(
+        run_search(&st, &channels, &q, user.id.as_i64()).await?,
+    ))
+}
+
+/// `GET /channels/:channel_id/messages/search` — recherche dans un seul salon (guilde ou MP).
+pub async fn search_channel(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(cid): Path<String>,
+    Query(q): Query<SearchQuery>,
+) -> AppResult<Json<SearchResponse>> {
+    let cid = parse_i64(&cid)?;
+    // Doit pouvoir lire le salon (gère salons de guilde et MP, avec surcharges).
+    pg::require_channel_perm(
+        &st.pool,
+        cid,
+        user.id.as_i64(),
+        perms::VIEW_CHANNEL | perms::READ_MESSAGE_HISTORY,
+    )
+    .await?;
+    Ok(Json(run_search(&st, &[cid], &q, user.id.as_i64()).await?))
 }

@@ -47,13 +47,15 @@
 | **R3** | Faible | **Politique de mot de passe** minimale (≥ 8). | zxcvbn + liste HIBP (slice comptes). |
 | **R4** | ~~Info~~ **Résolu (S6b)** | ~~`join_invite` ne vérifie pas un **bannissement**~~. | Contrôle de ban ajouté dans `join_invite` (cf. §10). |
 | **R5** | Faible | **Course sur le quota d'invitation d'instance** : la vérification `uses < max_uses` et la consommation `uses + 1` ne sont pas atomiques (deux statements séparés). Deux inscriptions concurrentes avec la même invitation à usage unique pourraient dépasser le quota de 1. | Consommation atomique via `UPDATE … WHERE uses < max_uses` à l'intérieur d'une transaction `BEGIN IMMEDIATE` (passe de durcissement transactionnel de `register`). Risque réel faible : scénario de bootstrap self-host, très faible concurrence sur la rédemption. |
+| **R6** | Moyenne | **Exécution de webhook non authentifiée et sans rate-limit** (S7) : un détenteur du jeton peut poster sans session ni quota → spam/abus. | Couche de rate-limit (cf. R1) avec **quota dédié par webhook** ; option de désactivation/rotation rapide du jeton. À traiter avant exposition publique. |
 
 ## 4. Comment rejouer
 
 ```sh
 cargo test -p ozone-api --test security      # intrusion S1/S2
 cargo test -p ozone-api --test security_s3   # intrusion S3
-cargo test -p ozone-api                       # suite complète (21 tests)
+cargo test -p ozone-api --test security_s7   # intrusion S7 (webhooks, recherche, événements)
+cargo test -p ozone-api                       # suite complète (69 tests)
 ```
 
 La CI ([.github/workflows/ci.yml](../.github/workflows/ci.yml)) exécute ces tests sur Ubuntu **et** AlmaLinux 9 à chaque push.
@@ -162,5 +164,32 @@ Défenses (`routes_instance_admin.rs` + `routes_auth.rs`) :
 - **Inscription sur invitation** : l'invitation d'instance est validée (existence, non-expiration, `uses < max_uses`) **avant** création puis consommée après — cf. **R5** pour la limite de concurrence sur le quota.
 - **Suspension effective** : `login` lit la colonne `suspended` et refuse la connexion (`403`). **F7 (corrigée à la revue)** : `refresh` ne vérifiait pas la suspension — un compte suspendu pouvait régénérer indéfiniment des jetons d'accès via la rotation du refresh token, contournant totalement la suspension. Corrigé sur deux niveaux : (1) la suspension **révoque immédiatement** toutes les sessions du compte (`DELETE FROM sessions`), et (2) `refresh` rejette tout renouvellement pour un compte suspendu (et purge ses sessions). Le jeton d'accès déjà émis reste valide jusqu'à sa **TTL de 10 min** (fenêtre acceptée). Régression couverte par `suspension_revokes_token_renewal`.
 
+## 12. S7 — Webhooks, recherche (FTS5), événements programmés
+
+Cœur **webhooks** + **recherche** écrit et audité par le mainteneur (la recherche touche aux entrailles de la messagerie et au filtrage par permissions — points sensibles) ; module **événements** écrit par un **sous-agent** puis audité de façon adverse par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur testé | Test (`security_s7.rs`) | Résultat |
+|---|---|---|
+| Membre sans `MANAGE_WEBHOOKS` crée/liste/modifie/supprime/régénère un webhook | `webhook_authorization` | `403` |
+| Exécution d'un webhook avec **mauvais jeton** ou **id inconnu** | idem | `401` (réponse uniforme) |
+| Création d'un webhook en **message privé** | idem | `403` |
+| **Fuite inter-salons** en recherche : membre cherchant dans un salon où VIEW est refusé | `search_respects_permissions` | `total = 0` (propriétaire : `1`) |
+| Recherche de guilde par un **non-membre** | idem | `403` |
+| Recherche par salon sans `VIEW_CHANNEL` | idem | `403` |
+| Membre sans `CREATE_EVENTS` crée un événement | `event_authorization_and_isolation` | `403` |
+| Non-créateur sans `MANAGE_EVENTS` modifie/supprime l'événement d'autrui | idem | `403` |
+| **Isolation inter-guildes** d'un événement (accès/gestion via une autre guilde) | idem | `404` |
+
+Défenses :
+- **Webhooks** (`routes_webhooks.rs`) : gestion gardée par `require_channel_perm(MANAGE_WEBHOOKS)` (honore les surcharges de salon) ; déplacement de salon revalidé sur la **cible** + **même guilde** (anti-IDOR inter-guildes) ; jeton secret de 256 bits (`URL_SAFE`), **jamais listé** (présent seulement à la création/régénération), régénérable (invalide l'ancien) ; exécution **non authentifiée par session** mais gardée par le jeton, avec réponse `401` **uniforme** (pas d'oracle d'existence), validation du contenu (1–4000) et du nom de remplacement (réservés `clyde`/`discord` rejetés). Les messages de webhook réutilisent l'insertion centralisée (déclencheurs FTS + `MESSAGE_CREATE` routé par portée).
+- **Recherche** (`routes_messages.rs`) : `require_guild_member` (guilde) / `require_channel_perm` (salon, gère les MP) ; les résultats sont **strictement restreints aux salons que l'utilisateur peut lire** (`viewable_channel_ids` recalcule `VIEW_CHANNEL | READ_MESSAGE_HISTORY` par salon) ; le `channel_id` demandé est **intersecté** avec l'ensemble autorisé (pas de contournement). **Injection** : seuls des entiers validés (`parse_i64`) sont interpolés ; le texte utilisateur passe par une requête FTS5 **paramétrée** où chaque terme est mis entre guillemets (aucun opérateur FTS injectable).
+- **Événements** (`routes_events.rs`, sous-agent) : `require_guild_member` (lecture/RSVP), `require_event_create` (création), `require_event_manage` (gestion : `MANAGE_EVENTS` ou créateur+`CREATE_EVENTS`) ; **toutes** les requêtes scopées `WHERE id = ? AND guild_id = ?` (pas d'IDOR inter-guildes) ; RSVP n'agit que sur la ligne de l'appelant ; validations (nom 1–100, type 1–3, salon ∈ guilde, lieu requis pour l'externe, fin > début, statut 1–4). Tout est paramétré.
+
+**Risques résiduels notés** (faibles/négligeables, non bloquants) :
+- **R6** (Moyen) : l'exécution de webhook est **non authentifiée** (jeton uniquement) et **sans rate-limit** → vecteur de spam/abus. À couvrir par la couche de rate-limit (cf. R1), avec un quota dédié par webhook.
+- Comparaison de jeton de webhook non à temps constant (négligeable : secret de 256 bits, attaque temporelle réseau irréaliste).
+- Oracle d'existence d'événement (`404` vs `403`) pour un non-membre sondant des identifiants (négligeable : Snowflakes 64 bits ; info interne à la guilde).
+- `viewable_channel_ids` calcule les permissions salon par salon (N requêtes) — **performance**, pas sécurité ; à optimiser pour les grosses guildes.
+
 ---
-*Document vivant — revue effectuée pour S1 → S6c ; à reconduire à chaque couche. À compléter par : fuzzing du parseur de protocole gateway, tests de charge (rate-limit), révocation de sessions à la suspension, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*
+*Document vivant — revue effectuée pour S1 → S7 ; à reconduire à chaque couche. À compléter par : rate-limiting (R1/R6, dont quota webhooks), fuzzing du parseur de protocole gateway, tests de charge, consommation transactionnelle des invitations (R5), et un audit du futur chiffrement vocal DAVE/MLS.*

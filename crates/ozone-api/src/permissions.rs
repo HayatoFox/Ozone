@@ -319,6 +319,59 @@ pub async fn require_expression_manage(
     ))
 }
 
+/// Exige que l'utilisateur soit **membre** de la guilde (ou le propriétaire).
+/// (`require_guild_perm(.., 0)` ne convient pas : `has(p, 0)` est toujours vrai.)
+pub async fn require_guild_member(pool: &SqlitePool, guild_id: i64, user_id: i64) -> AppResult<()> {
+    let owner = guild_owner(pool, guild_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    if owner == user_id {
+        return Ok(());
+    }
+    let is_member = sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = ? AND user_id = ?")
+        .bind(guild_id)
+        .bind(user_id)
+        .fetch_optional(pool)
+        .await?
+        .is_some();
+    if is_member {
+        Ok(())
+    } else {
+        Err(AppError::forbidden("réservé aux membres de la guilde"))
+    }
+}
+
+/// Droit de **créer** un événement programmé (`CREATE_EVENTS` ou `MANAGE_EVENTS`).
+pub async fn require_event_create(pool: &SqlitePool, guild_id: i64, user_id: i64) -> AppResult<()> {
+    let p = require_guild_perm(pool, guild_id, user_id, 0).await?;
+    if perms::has(p, perms::CREATE_EVENTS) || perms::has(p, perms::MANAGE_EVENTS) {
+        Ok(())
+    } else {
+        Err(AppError::forbidden(
+            "permissions insuffisantes pour créer un événement",
+        ))
+    }
+}
+
+/// Droit de **gérer** un événement : `MANAGE_EVENTS`, ou `CREATE_EVENTS` si on en est le créateur.
+pub async fn require_event_manage(
+    pool: &SqlitePool,
+    guild_id: i64,
+    user_id: i64,
+    creator_id: i64,
+) -> AppResult<()> {
+    let p = require_guild_perm(pool, guild_id, user_id, 0).await?;
+    if perms::has(p, perms::MANAGE_EVENTS) {
+        return Ok(());
+    }
+    if creator_id == user_id && perms::has(p, perms::CREATE_EVENTS) {
+        return Ok(());
+    }
+    Err(AppError::forbidden(
+        "permissions insuffisantes pour gérer cet événement",
+    ))
+}
+
 /// Rôle d'instance d'un utilisateur (`owner` / `admin` / `moderator` / `user`).
 pub async fn instance_role(pool: &SqlitePool, user_id: i64) -> AppResult<String> {
     let row = sqlx::query("SELECT role FROM instance_roles WHERE user_id = ?")

@@ -13,6 +13,7 @@ pub mod routes_auth;
 pub mod routes_chat;
 pub mod routes_dms;
 pub mod routes_emojis;
+pub mod routes_events;
 pub mod routes_guild;
 pub mod routes_instance;
 pub mod routes_instance_admin;
@@ -22,6 +23,7 @@ pub mod routes_relationships;
 pub mod routes_roles;
 pub mod routes_soundboard;
 pub mod routes_stickers;
+pub mod routes_webhooks;
 pub mod state;
 pub mod util;
 
@@ -200,6 +202,49 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/guilds/:guild_id/soundboard/:sound_id",
             patch(routes_soundboard::update_sound).delete(routes_soundboard::delete_sound),
+        )
+        // Recherche de messages (FTS5)
+        .route(
+            "/guilds/:guild_id/messages/search",
+            get(routes_messages::search_guild),
+        )
+        .route(
+            "/channels/:channel_id/messages/search",
+            get(routes_messages::search_channel),
+        )
+        // Webhooks (gestion + exécution par jeton)
+        .route(
+            "/channels/:channel_id/webhooks",
+            get(routes_webhooks::list_channel_webhooks).post(routes_webhooks::create_webhook),
+        )
+        .route(
+            "/guilds/:guild_id/webhooks",
+            get(routes_webhooks::list_guild_webhooks),
+        )
+        .route(
+            "/webhooks/:webhook_id",
+            patch(routes_webhooks::update_webhook)
+                .delete(routes_webhooks::delete_webhook)
+                .post(routes_webhooks::regenerate_token),
+        )
+        .route(
+            "/webhooks/:webhook_id/:token",
+            post(routes_webhooks::execute_webhook),
+        )
+        // Événements programmés
+        .route(
+            "/guilds/:guild_id/events",
+            get(routes_events::list_events).post(routes_events::create_event),
+        )
+        .route(
+            "/guilds/:guild_id/events/:event_id",
+            get(routes_events::get_event)
+                .patch(routes_events::update_event)
+                .delete(routes_events::delete_event),
+        )
+        .route(
+            "/guilds/:guild_id/events/:event_id/interested",
+            put(routes_events::rsvp_event).delete(routes_events::unrsvp_event),
         )
         // Gateway temps réel
         .route("/gateway", get(gateway::ws_handler))

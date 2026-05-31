@@ -202,6 +202,9 @@ pub struct Message {
     pub referenced_message: Option<Box<Message>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub nonce: Option<String>,
+    /// Présent si le message a été émis par un webhook (l'`author` porte alors le nom/avatar du webhook).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub webhook_id: Option<Snowflake>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -559,4 +562,119 @@ pub struct SetInstanceRole {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct SetSuspended {
     pub suspended: bool,
+}
+
+// ──────────────────────────────── Webhooks ────────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Webhook {
+    pub id: Snowflake,
+    pub channel_id: Snowflake,
+    pub guild_id: Snowflake,
+    pub name: String,
+    pub avatar_id: Option<String>,
+    pub created_by: Snowflake,
+    pub created_at: u64,
+    /// Jeton secret d'exécution — présent **uniquement** à la création / régénération.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub token: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CreateWebhook {
+    pub name: String,
+    #[serde(default)]
+    pub avatar_id: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateWebhook {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub avatar_id: Option<String>,
+    /// Déplacer le webhook vers un autre salon de la même guilde.
+    #[serde(default)]
+    pub channel_id: Option<Snowflake>,
+}
+
+/// Corps d'exécution d'un webhook (auth par jeton dans l'URL, pas de session).
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ExecuteWebhook {
+    pub content: String,
+    /// Nom d'affichage de remplacement pour ce message.
+    #[serde(default)]
+    pub username: Option<String>,
+    /// Avatar de remplacement pour ce message.
+    #[serde(default)]
+    pub avatar_id: Option<String>,
+}
+
+// ──────────────────────────── Événements programmés ────────────────────────────
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct ScheduledEvent {
+    pub id: Snowflake,
+    pub guild_id: Snowflake,
+    pub channel_id: Option<Snowflake>,
+    pub creator_id: Snowflake,
+    pub name: String,
+    pub description: Option<String>,
+    pub cover_id: Option<String>,
+    /// 1 = stage, 2 = vocal, 3 = externe.
+    pub entity_type: u8,
+    pub location: Option<String>,
+    pub scheduled_start: i64,
+    pub scheduled_end: Option<i64>,
+    /// 1 = programmé, 2 = actif, 3 = terminé, 4 = annulé.
+    pub status: u8,
+    pub interested_count: i64,
+    pub created_at: u64,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct CreateEvent {
+    pub name: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub cover_id: Option<String>,
+    pub entity_type: u8,
+    #[serde(default)]
+    pub channel_id: Option<Snowflake>,
+    #[serde(default)]
+    pub location: Option<String>,
+    pub scheduled_start: i64,
+    #[serde(default)]
+    pub scheduled_end: Option<i64>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct UpdateEvent {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default)]
+    pub cover_id: Option<String>,
+    #[serde(default)]
+    pub channel_id: Option<Snowflake>,
+    #[serde(default)]
+    pub location: Option<String>,
+    #[serde(default)]
+    pub scheduled_start: Option<i64>,
+    #[serde(default)]
+    pub scheduled_end: Option<i64>,
+    /// Transition de statut (2 = démarrer, 3 = terminer, 4 = annuler).
+    #[serde(default)]
+    pub status: Option<u8>,
+}
+
+// ──────────────────────────────── Recherche ────────────────────────────────
+
+/// Réponse de recherche de messages : messages + total estimé.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct SearchResponse {
+    pub total: i64,
+    pub messages: Vec<Message>,
 }
