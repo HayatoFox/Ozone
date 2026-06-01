@@ -10,7 +10,7 @@
 //! n'exécute jamais le contenu : tout est affiché en **texte brut** (aucune exécution côté UI).
 
 use iced::futures::{SinkExt, Stream};
-use iced::widget::{button, column, container, row, scrollable, text, text_input};
+use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
 use crate::style;
@@ -886,7 +886,7 @@ impl App {
         let header = container(
             row![
                 text("#").size(20).color(style::color::muted()),
-                text(chan).size(16).color(style::color::header()),
+                text(chan.clone()).size(16).color(style::color::header()),
             ]
             .spacing(8)
             .align_y(Alignment::Center),
@@ -895,24 +895,66 @@ impl App {
         .padding(16)
         .style(style::header_bar);
 
-        let mut feed = column![].spacing(16).padding(16);
-        for m in &self.messages {
-            let author = m
-                .author
-                .display_name
-                .clone()
-                .unwrap_or_else(|| m.author.username.clone());
-            let body = column![
-                text(author.clone()).size(15).color(style::color::header()),
-                text(m.content.clone()).size(15).color(style::color::text()),
-            ]
-            .spacing(2);
-            feed = feed.push(row![avatar(&author, 40.0), body].spacing(12));
-        }
-        let feed = scrollable(feed).height(Length::Fill).width(Length::Fill);
+        // Fil : groupement des messages consécutifs d'un même auteur (façon Discord).
+        let body: Element<Message> = if self.messages.is_empty() {
+            container(
+                text(format!("C'est le tout début de #{chan}."))
+                    .size(14)
+                    .color(style::color::muted()),
+            )
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .into()
+        } else {
+            let mut feed = column![].spacing(4).padding(16);
+            let mut prev: Option<i64> = None;
+            for m in &self.messages {
+                let aid = m.author.id.as_i64();
+                if prev == Some(aid) {
+                    // Message groupé : juste le contenu, indenté sous l'avatar.
+                    feed = feed.push(row![
+                        Space::with_width(Length::Fixed(52.0)),
+                        text(m.content.clone()).size(15).color(style::color::text()),
+                    ]);
+                } else {
+                    if prev.is_some() {
+                        feed = feed.push(Space::with_height(Length::Fixed(8.0)));
+                    }
+                    let author = m
+                        .author
+                        .display_name
+                        .clone()
+                        .unwrap_or_else(|| m.author.username.clone());
+                    let head = row![
+                        text(author.clone()).size(15).color(style::color::header()),
+                        text(fmt_time(m.created_at))
+                            .size(11)
+                            .color(style::color::muted()),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center);
+                    let col = column![
+                        head,
+                        text(m.content.clone()).size(15).color(style::color::text())
+                    ]
+                    .spacing(2);
+                    feed = feed.push(row![avatar(&author, 40.0), col].spacing(12));
+                }
+                prev = Some(aid);
+            }
+            scrollable(feed)
+                .height(Length::Fill)
+                .width(Length::Fill)
+                .into()
+        };
 
+        let placeholder = if chan.is_empty() {
+            "Envoyer un message".to_string()
+        } else {
+            format!("Envoyer un message dans #{chan}")
+        };
         let composer = container(
-            text_input("Envoyer un message…", &self.composer)
+            text_input(&placeholder, &self.composer)
                 .on_input(Message::ComposerChanged)
                 .on_submit(Message::SendMessage)
                 .padding(12)
@@ -920,7 +962,7 @@ impl App {
         )
         .padding(16);
 
-        let col = column![header, feed, composer]
+        let col = column![header, body, composer]
             .width(Length::Fill)
             .height(Length::Fill);
         container(col)
@@ -929,6 +971,14 @@ impl App {
             .style(style::chat_bg)
             .into()
     }
+}
+
+/// Heure (UTC `HH:MM`) à partir d'un timestamp en millisecondes.
+fn fmt_time(ms: u64) -> String {
+    let secs = ms / 1000;
+    let h = (secs / 3600) % 24;
+    let m = (secs / 60) % 60;
+    format!("{h:02}:{m:02}")
 }
 
 /// Première lettre (majuscule) d'un nom, pour les avatars/icônes.
@@ -1164,6 +1214,20 @@ mod tests {
         // Retour en mode connexion.
         let _ = app.update(Message::ToggleAuthMode);
         assert_eq!(app.auth_mode, AuthMode::Login);
+    }
+
+    #[test]
+    fn fmt_time_is_utc_hh_mm() {
+        assert_eq!(fmt_time(0), "00:00");
+        assert_eq!(fmt_time((3600 + 120) * 1000), "01:02");
+        assert_eq!(fmt_time(23 * 3600 * 1000 + 59 * 60 * 1000), "23:59");
+    }
+
+    #[test]
+    fn initial_uppercases_first_char() {
+        assert_eq!(initial("alice"), "A");
+        assert_eq!(initial("  bob"), "B");
+        assert_eq!(initial(""), "?");
     }
 
     #[test]
