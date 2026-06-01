@@ -48,17 +48,29 @@ impl ApiClient {
         self.gate_token = gate_token;
     }
 
-    fn url(&self, path: &str) -> String {
+    pub(crate) fn url(&self, path: &str) -> String {
         format!("{}{}", self.base, path)
     }
 
-    /// Exécute une requête et désérialise la réponse JSON (erreur explicite sur statut non-2xx).
-    async fn run<T: DeserializeOwned>(&self, rb: reqwest::RequestBuilder) -> Result<T> {
-        let rb = match &self.token {
+    /// Référence au client HTTP (pour les requêtes multipart spécifiques, p. ex. pièces jointes).
+    pub(crate) fn http(&self) -> &reqwest::Client {
+        &self.http
+    }
+
+    /// Ajoute le bearer si un jeton est présent.
+    pub(crate) fn auth(&self, rb: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        match &self.token {
             Some(t) => rb.bearer_auth(t),
             None => rb,
-        };
-        let resp = rb.send().await?;
+        }
+    }
+
+    /// Exécute une requête et désérialise la réponse JSON (erreur explicite sur statut non-2xx).
+    pub(crate) async fn send_json<T: DeserializeOwned>(
+        &self,
+        rb: reqwest::RequestBuilder,
+    ) -> Result<T> {
+        let resp = self.auth(rb).send().await?;
         let status = resp.status();
         if !status.is_success() {
             let body = resp.text().await.unwrap_or_default();
@@ -67,12 +79,61 @@ impl ApiClient {
         Ok(resp.json::<T>().await?)
     }
 
-    async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
-        self.run(self.http.get(self.url(path))).await
+    /// Exécute une requête en attendant un **succès sans corps** (204/200 ignoré).
+    pub(crate) async fn send_unit(&self, rb: reqwest::RequestBuilder) -> Result<()> {
+        let resp = self.auth(rb).send().await?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            return Err(anyhow!("HTTP {status} : {body}"));
+        }
+        Ok(())
     }
 
-    async fn post<T: DeserializeOwned>(&self, path: &str, body: serde_json::Value) -> Result<T> {
-        self.run(self.http.post(self.url(path)).json(&body)).await
+    // ── Verbes typés (réponse JSON) ──
+    pub(crate) async fn get<T: DeserializeOwned>(&self, path: &str) -> Result<T> {
+        self.send_json(self.http.get(self.url(path))).await
+    }
+    pub(crate) async fn post<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: impl serde::Serialize,
+    ) -> Result<T> {
+        self.send_json(self.http.post(self.url(path)).json(&body))
+            .await
+    }
+    pub(crate) async fn put<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: impl serde::Serialize,
+    ) -> Result<T> {
+        self.send_json(self.http.put(self.url(path)).json(&body))
+            .await
+    }
+    pub(crate) async fn patch<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        body: impl serde::Serialize,
+    ) -> Result<T> {
+        self.send_json(self.http.patch(self.url(path)).json(&body))
+            .await
+    }
+
+    // ── Verbes sans corps de réponse ──
+    pub(crate) async fn post_unit(&self, path: &str, body: impl serde::Serialize) -> Result<()> {
+        self.send_unit(self.http.post(self.url(path)).json(&body))
+            .await
+    }
+    pub(crate) async fn put_unit(&self, path: &str, body: impl serde::Serialize) -> Result<()> {
+        self.send_unit(self.http.put(self.url(path)).json(&body))
+            .await
+    }
+    pub(crate) async fn patch_unit(&self, path: &str, body: impl serde::Serialize) -> Result<()> {
+        self.send_unit(self.http.patch(self.url(path)).json(&body))
+            .await
+    }
+    pub(crate) async fn delete_unit(&self, path: &str) -> Result<()> {
+        self.send_unit(self.http.delete(self.url(path))).await
     }
 
     // ─────────────── Instance & authentification ───────────────

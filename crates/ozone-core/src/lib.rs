@@ -6,6 +6,22 @@
 
 pub mod cache;
 pub mod client;
+pub mod client_account;
+pub mod client_discovery;
+pub mod client_dms;
+pub mod client_events;
+pub mod client_expressions;
+pub mod client_guild;
+pub mod client_instance_admin;
+pub mod client_invites;
+pub mod client_members;
+pub mod client_messaging;
+pub mod client_notifications;
+pub mod client_polls;
+pub mod client_relationships;
+pub mod client_roles;
+pub mod client_search;
+pub mod client_webhooks;
 pub mod gateway;
 pub mod instances;
 pub mod session;
