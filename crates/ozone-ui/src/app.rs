@@ -10,7 +10,7 @@
 //! n'exécute jamais le contenu : tout est affiché en **texte brut** (aucune exécution côté UI).
 
 use iced::futures::{SinkExt, Stream};
-use iced::widget::{button, column, container, row, scrollable, text, text_input, Space};
+use iced::widget::{button, column, container, row, scrollable, stack, text, text_input, Space};
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
 use crate::style;
@@ -67,6 +67,26 @@ pub enum Message {
     EmailChanged(String),
     /// Bascule entre connexion et inscription.
     ToggleAuthMode,
+    // ── Boîtes de dialogue (guildes / salons) ──
+    OpenDialog(Dialog),
+    CloseDialog,
+    DialogName(String),
+    DialogCode(String),
+    CreateGuildSubmit,
+    JoinGuildSubmit,
+    CreateChannelSubmit,
+    GuildCreated(usize, Result<Box<Guild>, String>),
+    GuildJoined(usize, Result<Box<Guild>, String>),
+    ChannelCreated(usize, Result<Box<Channel>, String>),
+}
+
+/// Boîte de dialogue active (modale).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Dialog {
+    /// Ajouter un serveur : créer (nom) ou rejoindre (code d'invitation).
+    AddGuild,
+    /// Créer un salon dans la guilde courante.
+    CreateChannel,
 }
 
 /// Mode de l'écran d'authentification.
@@ -124,6 +144,10 @@ pub struct App {
     selected_channel: Option<i64>,
     composer: String,
     theme_choice: ThemeChoice,
+    // Boîte de dialogue modale + ses champs.
+    dialog: Option<Dialog>,
+    dialog_name: String,
+    dialog_code: String,
 }
 
 /// Le formulaire d'authentification est-il complet (gate inclus si requis) ?
@@ -154,6 +178,9 @@ impl App {
                 selected_channel: None,
                 composer: String::new(),
                 theme_choice: ThemeChoice::default(),
+                dialog: None,
+                dialog_name: String::new(),
+                dialog_code: String::new(),
             },
             Task::none(),
         )
@@ -509,6 +536,122 @@ impl App {
                 self.theme_choice = self.theme_choice.next();
                 Task::none()
             }
+            Message::OpenDialog(d) => {
+                self.dialog = Some(d);
+                self.dialog_name.clear();
+                self.dialog_code.clear();
+                self.status.clear();
+                Task::none()
+            }
+            Message::CloseDialog => {
+                self.dialog = None;
+                Task::none()
+            }
+            Message::DialogName(v) => {
+                self.dialog_name = v;
+                Task::none()
+            }
+            Message::DialogCode(v) => {
+                self.dialog_code = v;
+                Task::none()
+            }
+            Message::CreateGuildSubmit => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let name = self.dialog_name.trim().to_string();
+                if name.is_empty() {
+                    return Task::none();
+                }
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.create_guild(&name)
+                            .await
+                            .map(Box::new)
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::GuildCreated(idx, r),
+                )
+            }
+            Message::JoinGuildSubmit => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let code = self.dialog_code.trim().to_string();
+                if code.is_empty() {
+                    return Task::none();
+                }
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.join_invite(&code)
+                            .await
+                            .map(Box::new)
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::GuildJoined(idx, r),
+                )
+            }
+            Message::CreateChannelSubmit => {
+                let (Some(idx), Some(gid)) = (self.current, self.selected_guild) else {
+                    return Task::none();
+                };
+                let name = self.dialog_name.trim().to_string();
+                if name.is_empty() {
+                    return Task::none();
+                }
+                let create = ozone_core::proto::dto::CreateChannel {
+                    name,
+                    kind: 0,
+                    topic: None,
+                    parent_id: None,
+                    nsfw: None,
+                    rate_limit_per_user: None,
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.create_channel(Snowflake::from_i64(gid), &create)
+                            .await
+                            .map(Box::new)
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::ChannelCreated(idx, r),
+                )
+            }
+            Message::GuildCreated(idx, Ok(g)) | Message::GuildJoined(idx, Ok(g)) => {
+                self.dialog = None;
+                if self.current == Some(idx) {
+                    let gid = g.id.as_i64();
+                    if !self.guilds.iter().any(|x| x.id.as_i64() == gid) {
+                        self.guilds.push(*g);
+                    }
+                    return self.update(Message::SelectGuild(gid));
+                }
+                Task::none()
+            }
+            Message::GuildCreated(_, Err(e)) | Message::GuildJoined(_, Err(e)) => {
+                self.status = format!("Serveur : {e}");
+                Task::none()
+            }
+            Message::ChannelCreated(idx, Ok(c)) => {
+                self.dialog = None;
+                if self.current == Some(idx)
+                    && self.selected_guild == c.guild_id.map(|g| g.as_i64())
+                {
+                    let cid = c.id.as_i64();
+                    if !self.channels.iter().any(|x| x.id.as_i64() == cid) {
+                        self.channels.push(*c);
+                    }
+                    return self.update(Message::SelectChannel(cid));
+                }
+                Task::none()
+            }
+            Message::ChannelCreated(_, Err(e)) => {
+                self.status = format!("Salon : {e}");
+                Task::none()
+            }
         }
     }
 
@@ -572,7 +715,88 @@ impl App {
             Screen::Auth => self.auth_view(),
             Screen::Main => self.main_view(),
         };
-        row![self.nav_rail(), content].height(Length::Fill).into()
+        let base: Element<Message> = row![self.nav_rail(), content].height(Length::Fill).into();
+        match self.dialog {
+            Some(d) => stack![base, self.dialog_overlay(d)].into(),
+            None => base,
+        }
+    }
+
+    /// Modale centrée sur fond assombri (création/jointure de serveur, création de salon).
+    fn dialog_overlay(&self, d: Dialog) -> Element<'_, Message> {
+        let mut card = match d {
+            Dialog::AddGuild => column![
+                text("Ajouter un serveur")
+                    .size(20)
+                    .color(style::color::header()),
+                text("Créer un serveur")
+                    .size(13)
+                    .color(style::color::muted()),
+                text_input("Nom du serveur", &self.dialog_name)
+                    .on_input(Message::DialogName)
+                    .on_submit(Message::CreateGuildSubmit)
+                    .padding(12)
+                    .style(style::input_field),
+                button(text("Créer"))
+                    .on_press(Message::CreateGuildSubmit)
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(style::primary),
+                text("Rejoindre avec une invitation")
+                    .size(13)
+                    .color(style::color::muted()),
+                text_input("Code d'invitation", &self.dialog_code)
+                    .on_input(Message::DialogCode)
+                    .on_submit(Message::JoinGuildSubmit)
+                    .padding(12)
+                    .style(style::input_field),
+                button(text("Rejoindre"))
+                    .on_press(Message::JoinGuildSubmit)
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(style::secondary),
+            ]
+            .spacing(10)
+            .max_width(360),
+            Dialog::CreateChannel => column![
+                text("Créer un salon")
+                    .size(20)
+                    .color(style::color::header()),
+                text_input("nom-du-salon", &self.dialog_name)
+                    .on_input(Message::DialogName)
+                    .on_submit(Message::CreateChannelSubmit)
+                    .padding(12)
+                    .style(style::input_field),
+                button(text("Créer le salon"))
+                    .on_press(Message::CreateChannelSubmit)
+                    .padding(10)
+                    .width(Length::Fill)
+                    .style(style::primary),
+            ]
+            .spacing(10)
+            .max_width(360),
+        };
+        if !self.status.is_empty() {
+            card = card.push(
+                text(self.status.clone())
+                    .size(13)
+                    .color(style::color::muted()),
+            );
+        }
+        card = card.push(
+            button(text("Annuler"))
+                .on_press(Message::CloseDialog)
+                .padding(8)
+                .width(Length::Fill)
+                .style(style::subtle),
+        );
+        container(container(card).padding(24).style(style::card))
+            .center_x(Length::Fill)
+            .center_y(Length::Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(style::modal_backdrop)
+            .into()
     }
 
     /// Rail vertical façon Discord : instances en haut, serveurs (guildes) de l'instance courante,
@@ -606,6 +830,17 @@ impl App {
                 Message::SelectGuild(g.id.as_i64()),
             ));
         }
+        // « + » : créer ou rejoindre un serveur.
+        guilds = guilds.push(
+            button(
+                container(text("+").size(24).color(style::color::green()))
+                    .center_x(Length::Fixed(48.0))
+                    .center_y(Length::Fixed(48.0)),
+            )
+            .padding(0)
+            .style(style::guild_icon(false))
+            .on_press(Message::OpenDialog(Dialog::AddGuild)),
+        );
 
         let theme_btn = button(text("🎨").size(18))
             .padding(8)
@@ -825,9 +1060,18 @@ impl App {
             .padding(16)
             .style(style::header_bar);
 
-        let mut chans = column![text("SALONS").size(11).color(style::color::muted())]
-            .spacing(2)
-            .padding(8);
+        let chans_header = row![
+            text("SALONS")
+                .size(11)
+                .color(style::color::muted())
+                .width(Length::Fill),
+            button(text("+").size(16).color(style::color::muted()))
+                .padding(0)
+                .style(style::subtle)
+                .on_press(Message::OpenDialog(Dialog::CreateChannel)),
+        ]
+        .align_y(Alignment::Center);
+        let mut chans = column![chans_header].spacing(2).padding(8);
         for c in self.channels.iter().filter(|c| c.kind == 0 || c.kind == 2) {
             let selected = self.selected_channel == Some(c.id.as_i64());
             let prefix = if c.kind == 2 { "🔊" } else { "#" };
@@ -1214,6 +1458,22 @@ mod tests {
         // Retour en mode connexion.
         let _ = app.update(Message::ToggleAuthMode);
         assert_eq!(app.auth_mode, AuthMode::Login);
+    }
+
+    #[test]
+    fn dialog_open_input_and_close() {
+        let (mut app, _) = App::new();
+        assert!(app.dialog.is_none());
+        let _ = app.update(Message::OpenDialog(Dialog::AddGuild));
+        assert_eq!(app.dialog, Some(Dialog::AddGuild));
+        let _ = app.update(Message::DialogName("Mon Serveur".into()));
+        let _ = app.update(Message::DialogCode("ABC123".into()));
+        assert_eq!(app.dialog_name, "Mon Serveur");
+        assert_eq!(app.dialog_code, "ABC123");
+        // Soumission sans instance courante : pas de panique, dialogue inchangé.
+        let _ = app.update(Message::CreateGuildSubmit);
+        let _ = app.update(Message::CloseDialog);
+        assert!(app.dialog.is_none());
     }
 
     #[test]

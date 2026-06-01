@@ -204,6 +204,26 @@ pub fn primary(_t: &Theme, status: button::Status) -> button::Style {
     btn(Some(bg), color::white(), 4.0)
 }
 
+/// Bouton secondaire (gris) — annuler / action secondaire.
+pub fn secondary(_t: &Theme, status: button::Status) -> button::Style {
+    let bg = if is_hot(status) {
+        Color::from_rgb8(0x4e, 0x50, 0x58)
+    } else {
+        Color::from_rgb8(0x3a, 0x3c, 0x43)
+    };
+    btn(Some(bg), color::text(), 4.0)
+}
+
+/// Voile semi-transparent derrière une boîte de dialogue (modale).
+pub fn modal_backdrop(_t: &Theme) -> container::Style {
+    container::Style {
+        text_color: None,
+        background: Some(Background::Color(Color::from_rgba(0.0, 0.0, 0.0, 0.6))),
+        border: Border::default(),
+        shadow: Shadow::default(),
+    }
+}
+
 /// Lien-bouton (texte blurple, sans fond) — bascules « créer un compte / se connecter ».
 pub fn link(_t: &Theme, status: button::Status) -> button::Style {
     let txt = if is_hot(status) {
