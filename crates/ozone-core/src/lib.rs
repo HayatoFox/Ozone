@@ -7,6 +7,7 @@
 pub mod cache;
 pub mod client;
 pub mod client_account;
+pub mod client_attachments;
 pub mod client_discovery;
 pub mod client_dms;
 pub mod client_events;

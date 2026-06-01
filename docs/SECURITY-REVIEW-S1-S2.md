@@ -608,5 +608,17 @@ Un abonnement Iced ouvre la Gateway de l'instance courante et pousse ses événe
 
 Tests : **16 fichiers E2E** contre une vraie instance `ozone-api` (harnais partagé `tests/common`), **43 tests `ozone-core`** au total, tous verts ; `clippy -D warnings` propre. *(Restant hors périmètre de cette tranche : pièces jointes en multipart — tranche suivante ; et le câblage de ces capacités dans l'UI.)*
 
+## 40. S38 — Pièces jointes client (téléversement multipart + téléchargement)
+
+`client_attachments` complète la couverture : `upload_attachment` (form multipart, champ `file`, via `reqwest` feature `multipart`) → `Attachment` ; `download_attachment(url)` → octets bruts. Écrit et audité par le mainteneur. **Aucune faille exploitable.**
+
+| Vecteur examiné | Posture |
+|---|---|
+| Auth / permission | `upload` passe par `send_json` ⇒ bearer attaché ; le serveur exige `ATTACH_FILES` + appartenance au salon. `download` est bearer-authed et le serveur garde par `VIEW_CHANNEL` (+ `nosniff`/CSP/`Content-Disposition`, cf. §26/F8). |
+| Chemin de téléchargement | `download_attachment` prend le `url` **renvoyé par le serveur** (`/attachments/<id>/<nom assaini>`) ; appelé sur la même base bearer-authed — pas de surface d'injection nouvelle. |
+| `ring` serveur | Feature `multipart` **côté client uniquement** ; `ozone-api` inchangé ⇒ invariant zéro-`ring` intact. |
+
+Test : `upload_then_download_roundtrip` (les octets téléchargés == octets téléversés ; `size`/`filename` corrects). **Couverture client des routes non-vocales : complète.**
+
 ---
-*Document vivant — revue effectuée pour S1 → S37 ; à reconduire à chaque couche. À compléter par : pièces jointes multipart (client), câblage UI des nouvelles capacités, stockage chiffré des jetons + `zeroize` (UI/registre), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S38 ; à reconduire à chaque couche. À compléter par : câblage UI des nouvelles capacités, stockage chiffré des jetons + `zeroize` (UI/registre), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
