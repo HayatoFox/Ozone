@@ -11,7 +11,9 @@
 
 use iced::futures::{SinkExt, Stream};
 use iced::widget::{button, column, container, row, scrollable, text, text_input};
-use iced::{Element, Length, Subscription, Task, Theme};
+use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
+
+use crate::style;
 use ozone_core::proto::dto::{Channel, Guild, InstanceInfo, Message as ChatMessage, TokenPair};
 use ozone_core::proto::gateway::GatewayFrame;
 use ozone_core::proto::Snowflake;
@@ -89,6 +91,8 @@ struct Instance {
     authed: bool,
     /// Jeton d'accès (conservé pour alimenter l'abonnement Gateway temps réel).
     token: Option<String>,
+    /// Libellé de l'utilisateur connecté (pour le panneau utilisateur).
+    user_label: String,
 }
 
 /// État de l'application.
@@ -164,6 +168,7 @@ impl App {
             api: ApiClient::new(base),
             authed: false,
             token: None,
+            user_label: String::new(),
         });
         self.instances.len() - 1
     }
@@ -296,10 +301,12 @@ impl App {
                 )
             }
             Message::Authenticated(idx, Ok(tokens)) => {
+                let label = self.form_login.clone();
                 if let Some(inst) = self.instances.get_mut(idx) {
                     inst.api.set_token(Some(tokens.access_token.clone()));
                     inst.token = Some(tokens.access_token); // pour l'abonnement Gateway
                     inst.authed = true;
+                    inst.user_label = label;
                 }
                 self.current = Some(idx);
                 self.form_password.clear(); // ne pas conserver le mot de passe en mémoire
@@ -514,58 +521,93 @@ impl App {
             Screen::Auth => self.auth_view(),
             Screen::Main => self.main_view(),
         };
-        // Rail des instances toujours visible à gauche.
-        row![self.instance_rail(), content]
-            .height(Length::Fill)
-            .into()
+        row![self.nav_rail(), content].height(Length::Fill).into()
     }
 
-    fn instance_rail(&self) -> Element<'_, Message> {
-        let mut rail = column![text("Instances").size(12)].spacing(6).padding(8);
+    /// Rail vertical façon Discord : instances en haut, serveurs (guildes) de l'instance courante,
+    /// puis bascule de thème en bas. Colonne sombre étroite.
+    fn nav_rail(&self) -> Element<'_, Message> {
+        let mut instances = column![].spacing(8).align_x(Alignment::Center);
         for (i, inst) in self.instances.iter().enumerate() {
-            let mark = if self.current == Some(i) { "▸ " } else { "" };
-            let dot = if inst.authed { "●" } else { "○" };
-            rail = rail.push(
-                button(text(format!("{mark}{dot} {}", inst.name)))
-                    .width(Length::Fill)
-                    .on_press(Message::SelectInstance(i)),
-            );
+            instances = instances.push(rail_icon(
+                &inst.name,
+                self.current == Some(i),
+                Message::SelectInstance(i),
+            ));
         }
-        rail = rail.push(
-            button(text("+ Ajouter"))
-                .width(Length::Fill)
-                .on_press(Message::ShowAddInstance),
+        instances = instances.push(
+            button(
+                container(text("+").size(24).color(style::color::green()))
+                    .center_x(Length::Fixed(48.0))
+                    .center_y(Length::Fixed(48.0)),
+            )
+            .padding(0)
+            .style(style::guild_icon(false))
+            .on_press(Message::ShowAddInstance),
         );
-        rail = rail.push(
-            button(text(format!("🎨 {}", self.theme_choice.label())))
-                .width(Length::Fill)
-                .on_press(Message::CycleTheme),
-        );
+
+        let mut guilds = column![].spacing(8).align_x(Alignment::Center);
+        for g in &self.guilds {
+            let selected = self.selected_guild == Some(g.id.as_i64());
+            guilds = guilds.push(rail_icon(
+                &g.name,
+                selected,
+                Message::SelectGuild(g.id.as_i64()),
+            ));
+        }
+
+        let theme_btn = button(text("🎨").size(18))
+            .padding(8)
+            .style(style::subtle)
+            .on_press(Message::CycleTheme);
+
+        let rail = column![
+            instances,
+            rail_divider(),
+            scrollable(guilds).height(Length::Fill),
+            theme_btn,
+        ]
+        .spacing(8)
+        .padding(8)
+        .align_x(Alignment::Center)
+        .width(Length::Fill);
+
         container(rail)
-            .width(Length::Fixed(170.0))
+            .width(Length::Fixed(72.0))
             .height(Length::Fill)
+            .style(style::rail_bg)
             .into()
     }
 
     fn add_instance_view(&self) -> Element<'_, Message> {
         let form = column![
-            text("Ozone").size(32),
-            text("Ajouter une instance").size(16),
+            text("Ozone").size(28).color(style::color::header()),
+            text("Connecte-toi à une instance")
+                .size(14)
+                .color(style::color::muted()),
             text_input("https://mon-instance", &self.form_address)
                 .on_input(Message::AddressChanged)
                 .on_submit(Message::CheckInstance)
-                .padding(8),
+                .padding(12)
+                .style(style::input_field),
             button(text("Continuer"))
                 .on_press(Message::CheckInstance)
-                .padding(10),
-            text(self.status.clone()),
+                .padding(12)
+                .width(Length::Fill)
+                .style(style::primary),
+            text(self.status.clone())
+                .size(13)
+                .color(style::color::muted()),
         ]
-        .spacing(12)
-        .max_width(360);
-        container(form)
+        .spacing(14)
+        .max_width(380);
+
+        let card = container(form).padding(28).style(style::card);
+        container(card)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
-            .padding(20)
+            .padding(24)
+            .style(style::chat_bg)
             .into()
     }
 
@@ -592,20 +634,22 @@ impl App {
         };
 
         let mut form = column![
-            text(title).size(24),
+            text(title).size(22).color(style::color::header()),
             text_input(login_placeholder, &self.form_login)
                 .on_input(Message::LoginChanged)
-                .padding(8),
+                .padding(12)
+                .style(style::input_field),
         ]
-        .spacing(12)
-        .max_width(360);
+        .spacing(14)
+        .max_width(380);
 
         // L'e-mail n'est demandé qu'à l'inscription.
         if register {
             form = form.push(
                 text_input("e-mail", &self.form_email)
                     .on_input(Message::EmailChanged)
-                    .padding(8),
+                    .padding(12)
+                    .style(style::input_field),
             );
         }
 
@@ -614,7 +658,8 @@ impl App {
                 .on_input(Message::PasswordChanged)
                 .on_submit(Message::SubmitAuth)
                 .secure(true)
-                .padding(8),
+                .padding(12)
+                .style(style::input_field),
         );
 
         if gated {
@@ -622,7 +667,8 @@ impl App {
                 text_input("mot de passe d'instance", &self.form_gate_password)
                     .on_input(Message::GatePasswordChanged)
                     .secure(true)
-                    .padding(8),
+                    .padding(12)
+                    .style(style::input_field),
             );
         }
 
@@ -634,7 +680,9 @@ impl App {
         form = form.push(
             button(text(submit_label))
                 .on_press(Message::SubmitAuth)
-                .padding(10),
+                .padding(12)
+                .width(Length::Fill)
+                .style(style::primary),
         );
 
         // Bascule connexion ⇄ inscription.
@@ -643,83 +691,213 @@ impl App {
         } else {
             "Pas de compte ? En créer un"
         };
-        form = form.push(button(text(toggle_label)).on_press(Message::ToggleAuthMode));
+        form = form.push(
+            button(text(toggle_label).size(13))
+                .on_press(Message::ToggleAuthMode)
+                .style(style::link),
+        );
 
-        form = form.push(text(self.status.clone()));
+        if !self.status.is_empty() {
+            form = form.push(
+                text(self.status.clone())
+                    .size(13)
+                    .color(style::color::muted()),
+            );
+        }
 
-        container(form)
+        let card = container(form).padding(28).style(style::card);
+        container(card)
             .center_x(Length::Fill)
             .center_y(Length::Fill)
-            .padding(20)
+            .padding(24)
+            .style(style::chat_bg)
             .into()
     }
 
     fn main_view(&self) -> Element<'_, Message> {
-        let mut guilds = column![text("Guildes").size(14)].spacing(6).padding(8);
-        for g in &self.guilds {
-            let selected = self.selected_guild == Some(g.id.as_i64());
-            let label = if selected {
-                format!("▸ {}", g.name)
-            } else {
-                g.name.clone()
-            };
-            guilds = guilds.push(
-                button(text(label))
-                    .width(Length::Fill)
-                    .on_press(Message::SelectGuild(g.id.as_i64())),
-            );
-        }
+        row![self.channel_sidebar(), self.chat_view()]
+            .height(Length::Fill)
+            .into()
+    }
 
-        let mut channels = column![text("Salons").size(14)].spacing(6).padding(8);
+    /// Sidebar : en-tête (nom de la guilde), liste des salons, panneau utilisateur en bas.
+    fn channel_sidebar(&self) -> Element<'_, Message> {
+        let title = self
+            .guilds
+            .iter()
+            .find(|g| Some(g.id.as_i64()) == self.selected_guild)
+            .map(|g| g.name.clone())
+            .or_else(|| self.current.map(|i| self.instances[i].name.clone()))
+            .unwrap_or_default();
+        let header = container(text(title).size(16).color(style::color::header()))
+            .width(Length::Fill)
+            .padding(16)
+            .style(style::header_bar);
+
+        let mut chans = column![text("SALONS").size(11).color(style::color::muted())]
+            .spacing(2)
+            .padding(8);
         for c in self.channels.iter().filter(|c| c.kind == 0 || c.kind == 2) {
+            let selected = self.selected_channel == Some(c.id.as_i64());
             let prefix = if c.kind == 2 { "🔊" } else { "#" };
-            channels = channels.push(
-                button(text(format!("{prefix} {}", c.name)))
+            chans = chans.push(
+                button(text(format!("{prefix}  {}", c.name)).size(15))
                     .width(Length::Fill)
+                    .padding(8)
+                    .style(style::channel_item(selected))
                     .on_press(Message::SelectChannel(c.id.as_i64())),
             );
         }
 
-        let mut feed = column![].spacing(10).padding(8);
+        let col = column![
+            header,
+            scrollable(chans).height(Length::Fill),
+            self.user_panel(),
+        ]
+        .height(Length::Fill);
+
+        container(col)
+            .width(Length::Fixed(240.0))
+            .height(Length::Fill)
+            .style(style::sidebar_bg)
+            .into()
+    }
+
+    /// Panneau utilisateur (bas de la sidebar) : avatar + pseudo + statut.
+    fn user_panel(&self) -> Element<'_, Message> {
+        let label = self
+            .current
+            .map(|i| self.instances[i].user_label.clone())
+            .unwrap_or_default();
+        let info = column![
+            text(label.clone()).size(14).color(style::color::text()),
+            text("En ligne").size(11).color(style::color::green()),
+        ]
+        .spacing(1);
+        let panel = row![avatar(&label, 32.0), info]
+            .spacing(8)
+            .align_y(Alignment::Center)
+            .padding(8);
+        container(panel)
+            .width(Length::Fill)
+            .style(style::user_panel_bg)
+            .into()
+    }
+
+    /// Zone de chat : en-tête du salon, fil de messages (avatars), composeur.
+    fn chat_view(&self) -> Element<'_, Message> {
+        let chan = self
+            .channels
+            .iter()
+            .find(|c| Some(c.id.as_i64()) == self.selected_channel)
+            .map(|c| c.name.clone())
+            .unwrap_or_default();
+        let header = container(
+            row![
+                text("#").size(20).color(style::color::muted()),
+                text(chan).size(16).color(style::color::header()),
+            ]
+            .spacing(8)
+            .align_y(Alignment::Center),
+        )
+        .width(Length::Fill)
+        .padding(16)
+        .style(style::header_bar);
+
+        let mut feed = column![].spacing(16).padding(16);
         for m in &self.messages {
             let author = m
                 .author
                 .display_name
                 .clone()
                 .unwrap_or_else(|| m.author.username.clone());
-            feed = feed
-                .push(column![text(author).size(13), text(m.content.clone()).size(15)].spacing(2));
+            let body = column![
+                text(author.clone()).size(15).color(style::color::header()),
+                text(m.content.clone()).size(15).color(style::color::text()),
+            ]
+            .spacing(2);
+            feed = feed.push(row![avatar(&author, 40.0), body].spacing(12));
         }
-        let feed = scrollable(feed).height(Length::Fill);
+        let feed = scrollable(feed).height(Length::Fill).width(Length::Fill);
 
-        let composer = row![
-            text_input("Message…", &self.composer)
+        let composer = container(
+            text_input("Envoyer un message…", &self.composer)
                 .on_input(Message::ComposerChanged)
                 .on_submit(Message::SendMessage)
-                .padding(8),
-            button(text("Envoyer"))
-                .on_press(Message::SendMessage)
-                .padding(8),
-        ]
-        .spacing(8)
-        .padding(8);
+                .padding(12)
+                .style(style::composer_field),
+        )
+        .padding(16);
 
-        let main = column![feed, composer]
+        let col = column![header, feed, composer]
             .width(Length::Fill)
             .height(Length::Fill);
-
-        row![
-            container(guilds)
-                .width(Length::Fixed(180.0))
-                .height(Length::Fill),
-            container(channels)
-                .width(Length::Fixed(200.0))
-                .height(Length::Fill),
-            container(main).width(Length::Fill).height(Length::Fill),
-        ]
-        .height(Length::Fill)
-        .into()
+        container(col)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(style::chat_bg)
+            .into()
     }
+}
+
+/// Première lettre (majuscule) d'un nom, pour les avatars/icônes.
+fn initial(name: &str) -> String {
+    name.trim()
+        .chars()
+        .next()
+        .map(|c| c.to_uppercase().to_string())
+        .unwrap_or_else(|| "?".to_string())
+}
+
+/// Couleur d'avatar dérivée du nom (palette façon Discord).
+fn avatar_color(seed: &str) -> Color {
+    let palette = [
+        Color::from_rgb8(0x58, 0x65, 0xf2),
+        Color::from_rgb8(0x23, 0xa5, 0x5a),
+        Color::from_rgb8(0xda, 0x37, 0x3c),
+        Color::from_rgb8(0xfa, 0xa6, 0x1a),
+        Color::from_rgb8(0x9b, 0x59, 0xb6),
+        Color::from_rgb8(0x1a, 0xbc, 0x9c),
+    ];
+    let h = seed
+        .bytes()
+        .fold(0u32, |a, b| a.wrapping_mul(31).wrapping_add(b as u32));
+    palette[(h as usize) % palette.len()]
+}
+
+/// Pastille avatar : initiale blanche sur disque coloré (dérivé du nom).
+fn avatar<'a>(name: &str, size: f32) -> Element<'a, Message> {
+    container(
+        text(initial(name))
+            .size(size * 0.42)
+            .color(style::color::white()),
+    )
+    .center_x(Length::Fixed(size))
+    .center_y(Length::Fixed(size))
+    .style(style::dot(avatar_color(name), size / 2.0))
+    .into()
+}
+
+/// Icône ronde du rail (initiale) ; survol/sélection mis en évidence.
+fn rail_icon<'a>(label: &str, selected: bool, msg: Message) -> Element<'a, Message> {
+    button(
+        container(text(initial(label)).size(18).color(style::color::white()))
+            .center_x(Length::Fixed(48.0))
+            .center_y(Length::Fixed(48.0)),
+    )
+    .padding(0)
+    .style(style::guild_icon(selected))
+    .on_press(msg)
+    .into()
+}
+
+/// Fin séparateur horizontal du rail.
+fn rail_divider<'a>() -> Element<'a, Message> {
+    container(text(" "))
+        .width(Length::Fixed(32.0))
+        .height(Length::Fixed(2.0))
+        .style(style::dot(style::color::input(), 1.0))
+        .into()
 }
 
 /// Flux d'événements Gateway pour l'abonnement Iced : (re)connecte avec **RESUME** quand possible

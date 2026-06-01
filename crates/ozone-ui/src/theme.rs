@@ -18,16 +18,6 @@ pub enum ThemeChoice {
 }
 
 impl ThemeChoice {
-    /// Libellé court pour l'UI.
-    pub fn label(self) -> &'static str {
-        match self {
-            ThemeChoice::OzoneDark => "Ozone sombre",
-            ThemeChoice::OzoneLight => "Ozone clair",
-            ThemeChoice::Dark => "Sombre",
-            ThemeChoice::Light => "Clair",
-        }
-    }
-
     /// Thème suivant dans le cycle (pour un bouton « changer de thème »).
     pub fn next(self) -> Self {
         match self {
@@ -87,14 +77,13 @@ mod tests {
     }
 
     #[test]
-    fn labels_are_non_empty() {
+    fn every_choice_builds_a_theme() {
         for c in [
             ThemeChoice::OzoneDark,
             ThemeChoice::OzoneLight,
             ThemeChoice::Dark,
             ThemeChoice::Light,
         ] {
-            assert!(!c.label().is_empty());
             let _ = c.to_theme(); // ne panique pas
         }
     }
