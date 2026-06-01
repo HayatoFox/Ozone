@@ -620,5 +620,9 @@ Tests : **16 fichiers E2E** contre une vraie instance `ozone-api` (harnais parta
 
 Test : `upload_then_download_roundtrip` (les octets téléchargés == octets téléversés ; `size`/`filename` corrects). **Couverture client des routes non-vocales : complète.**
 
+## 41. S39 — Inscription dans l'UI (bascule connexion ⇄ inscription)
+
+L'écran d'auth gagne un mode **inscription** (pseudo + e-mail + mot de passe) en plus de la connexion, au-dessus du binding `register` **déjà audité** (§35/§39, jeton de gate inclus). **Aucune faille exploitable.** Posture : même flux gardé (gate si requis) ; mot de passe **et e-mail effacés** de la mémoire après succès ; rendu **texte brut** (pas d'exécution) ; aucune nouvelle surface réseau (réutilise `ApiClient::register`). Test : `register_mode_requires_email` (bascule + e-mail requis avant soumission). ozone-ui = 9 tests, clippy propre.
+
 ---
-*Document vivant — revue effectuée pour S1 → S38 ; à reconduire à chaque couche. À compléter par : câblage UI des nouvelles capacités, stockage chiffré des jetons + `zeroize` (UI/registre), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*
+*Document vivant — revue effectuée pour S1 → S39 ; à reconduire à chaque couche. À compléter par : câblage UI des autres capacités (DMs, rôles, modération…), stockage chiffré des jetons + `zeroize` (UI/registre), plafond de sessions/utilisateur + rate-limit des opcodes (R9), renégociation WS (mesh N-à-N) + E2EE DAVE/MLS (média) et leur audit, applications/bots/OAuth, rate-limiting REST (R1/R6), URLs signées pour pièces jointes, fuzzing du parseur gateway, tests de charge, et consommation transactionnelle des invitations (R5).*

@@ -56,6 +56,18 @@ pub enum Message {
     GatewayEvent(Box<GatewayFrame>),
     /// Bascule vers le thème suivant.
     CycleTheme,
+    /// Champ e-mail (utilisé en mode inscription).
+    EmailChanged(String),
+    /// Bascule entre connexion et inscription.
+    ToggleAuthMode,
+}
+
+/// Mode de l'écran d'authentification.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum AuthMode {
+    #[default]
+    Login,
+    Register,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -87,8 +99,10 @@ pub struct App {
     // Formulaire d'ajout / d'authentification (instance ciblée = `current`).
     form_address: String,
     form_login: String,
+    form_email: String,
     form_password: String,
     form_gate_password: String,
+    auth_mode: AuthMode,
     status: String,
     // Données de l'instance courante.
     guilds: Vec<Guild>,
@@ -114,8 +128,10 @@ impl App {
                 screen: Screen::AddInstance,
                 form_address: "http://127.0.0.1:8080".to_string(),
                 form_login: String::new(),
+                form_email: String::new(),
                 form_password: String::new(),
                 form_gate_password: String::new(),
+                auth_mode: AuthMode::Login,
                 status: String::new(),
                 guilds: Vec::new(),
                 channels: Vec::new(),
@@ -179,10 +195,16 @@ impl App {
                 self.form_gate_password = v;
                 Task::none()
             }
+            Message::EmailChanged(v) => {
+                self.form_email = v;
+                Task::none()
+            }
             Message::ShowAddInstance => {
                 self.form_login.clear();
+                self.form_email.clear();
                 self.form_password.clear();
                 self.form_gate_password.clear();
+                self.auth_mode = AuthMode::Login;
                 self.status.clear();
                 self.screen = Screen::AddInstance;
                 Task::none()
@@ -217,23 +239,39 @@ impl App {
                 self.status = format!("Instance injoignable : {e}");
                 Task::none()
             }
+            Message::ToggleAuthMode => {
+                self.auth_mode = match self.auth_mode {
+                    AuthMode::Login => AuthMode::Register,
+                    AuthMode::Register => AuthMode::Login,
+                };
+                self.status.clear();
+                Task::none()
+            }
             Message::SubmitAuth => {
                 let Some(idx) = self.current else {
                     return Task::none();
                 };
                 let gated = self.instances[idx].gated;
-                if !can_authenticate(
+                let register = self.auth_mode == AuthMode::Register;
+                let base_ok = can_authenticate(
                     &self.form_login,
                     &self.form_password,
                     gated,
                     &self.form_gate_password,
-                ) {
+                );
+                // En inscription, l'e-mail est requis en plus.
+                if !base_ok || (register && self.form_email.trim().is_empty()) {
                     self.status = "Complète les champs requis.".into();
                     return Task::none();
                 }
-                self.status = "Connexion…".into();
+                self.status = if register {
+                    "Création du compte…".into()
+                } else {
+                    "Connexion…".into()
+                };
                 let mut api = self.instances[idx].api.clone();
                 let login = self.form_login.clone();
+                let email = self.form_email.clone();
                 let password = self.form_password.clone();
                 let gate_password = self.form_gate_password.clone();
                 Task::perform(
@@ -242,10 +280,17 @@ impl App {
                             let gt = api.gate(&gate_password).await.map_err(|e| e.to_string())?;
                             api.set_gate_token(Some(gt));
                         }
-                        api.login(&login, &password)
-                            .await
-                            .map(Box::new)
-                            .map_err(|e| e.to_string())
+                        if register {
+                            api.register(&login, &email, &password)
+                                .await
+                                .map(Box::new)
+                                .map_err(|e| e.to_string())
+                        } else {
+                            api.login(&login, &password)
+                                .await
+                                .map(Box::new)
+                                .map_err(|e| e.to_string())
+                        }
                     },
                     move |r| Message::Authenticated(idx, r),
                 )
@@ -259,6 +304,7 @@ impl App {
                 self.current = Some(idx);
                 self.form_password.clear(); // ne pas conserver le mot de passe en mémoire
                 self.form_gate_password.clear();
+                self.form_email.clear();
                 self.status.clear();
                 self.guilds.clear();
                 self.channels.clear();
@@ -533,18 +579,43 @@ impl App {
             .map(|i| self.instances[i].name.clone())
             .unwrap_or_default();
 
+        let register = self.auth_mode == AuthMode::Register;
+        let title = if register {
+            format!("Créer un compte sur {name}")
+        } else {
+            format!("Connexion à {name}")
+        };
+        let login_placeholder = if register {
+            "pseudo"
+        } else {
+            "identifiant ou e-mail"
+        };
+
         let mut form = column![
-            text(format!("Connexion à {name}")).size(24),
-            text_input("identifiant ou e-mail", &self.form_login)
+            text(title).size(24),
+            text_input(login_placeholder, &self.form_login)
                 .on_input(Message::LoginChanged)
-                .padding(8),
-            text_input("mot de passe", &self.form_password)
-                .on_input(Message::PasswordChanged)
-                .secure(true)
                 .padding(8),
         ]
         .spacing(12)
         .max_width(360);
+
+        // L'e-mail n'est demandé qu'à l'inscription.
+        if register {
+            form = form.push(
+                text_input("e-mail", &self.form_email)
+                    .on_input(Message::EmailChanged)
+                    .padding(8),
+            );
+        }
+
+        form = form.push(
+            text_input("mot de passe", &self.form_password)
+                .on_input(Message::PasswordChanged)
+                .on_submit(Message::SubmitAuth)
+                .secure(true)
+                .padding(8),
+        );
 
         if gated {
             form = form.push(
@@ -554,11 +625,26 @@ impl App {
                     .padding(8),
             );
         }
+
+        let submit_label = if register {
+            "Créer le compte"
+        } else {
+            "Se connecter"
+        };
         form = form.push(
-            button(text("Se connecter"))
+            button(text(submit_label))
                 .on_press(Message::SubmitAuth)
                 .padding(10),
         );
+
+        // Bascule connexion ⇄ inscription.
+        let toggle_label = if register {
+            "Déjà un compte ? Se connecter"
+        } else {
+            "Pas de compte ? En créer un"
+        };
+        form = form.push(button(text(toggle_label)).on_press(Message::ToggleAuthMode));
+
         form = form.push(text(self.status.clone()));
 
         container(form)
@@ -769,6 +855,27 @@ mod tests {
             3,
         ))));
         assert!(app.messages.is_empty());
+    }
+
+    #[test]
+    fn register_mode_requires_email() {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::InstanceChecked(Ok(info("X", false))));
+        assert_eq!(app.auth_mode, AuthMode::Login);
+        let _ = app.update(Message::ToggleAuthMode);
+        assert_eq!(app.auth_mode, AuthMode::Register);
+        // Pseudo + mot de passe remplis, mais e-mail manquant ⇒ soumission refusée (pas de Task réseau).
+        let _ = app.update(Message::LoginChanged("bob".into()));
+        let _ = app.update(Message::PasswordChanged("motdepasse".into()));
+        let _ = app.update(Message::SubmitAuth);
+        assert!(!app.status.is_empty(), "champ requis manquant signalé");
+        assert_eq!(app.screen, Screen::Auth);
+        // Avec l'e-mail, le formulaire est complet.
+        let _ = app.update(Message::EmailChanged("bob@ex.fr".into()));
+        assert_eq!(app.form_email, "bob@ex.fr");
+        // Retour en mode connexion.
+        let _ = app.update(Message::ToggleAuthMode);
+        assert_eq!(app.auth_mode, AuthMode::Login);
     }
 
     #[test]
