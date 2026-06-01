@@ -143,6 +143,11 @@ impl ApiClient {
         self.get("/instance").await
     }
 
+    /// `GET /instance/health` — sonde de disponibilité (`{status, instance_id, version}`).
+    pub async fn health(&self) -> Result<serde_json::Value> {
+        self.get("/instance/health").await
+    }
+
     /// `POST /instance/gate` — échange le **mot de passe d'instance** contre un jeton de gate
     /// court. À stocker via [`ApiClient::set_gate_token`] avant l'inscription/connexion.
     pub async fn gate(&self, password: &str) -> Result<String> {

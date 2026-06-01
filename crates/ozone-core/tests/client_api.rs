@@ -43,6 +43,8 @@ async fn client_round_trip() {
     // Métadonnées d'instance (non authentifié).
     let info = client.instance_info().await.expect("instance_info");
     assert_eq!(info.name, "IT");
+    // Sonde de disponibilité.
+    assert_eq!(client.health().await.expect("health")["status"], "ok");
 
     // Inscription → jetons → on porte le jeton d'accès.
     let tokens = client
