@@ -15,7 +15,8 @@ use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
 use crate::style;
 use ozone_core::proto::dto::{
-    Channel, Guild, InstanceInfo, Member, Message as ChatMessage, PresenceView, TokenPair,
+    Channel, DMChannel, Guild, InstanceInfo, Member, Message as ChatMessage, PresenceView,
+    Relationship, RelationshipType, TokenPair,
 };
 use ozone_core::proto::gateway::GatewayFrame;
 use ozone_core::proto::Snowflake;
@@ -78,6 +79,27 @@ pub enum Message {
     GuildCreated(usize, Result<Box<Guild>, String>),
     GuildJoined(usize, Result<Box<Guild>, String>),
     ChannelCreated(usize, Result<Box<Channel>, String>),
+    // ── Accueil : messages privés + amis ──
+    GoHome,
+    DmsLoaded(usize, Result<Vec<DMChannel>, String>),
+    RelationshipsLoaded(usize, Result<Vec<Relationship>, String>),
+    OpenDm(i64),
+    StartDm(i64),
+    DmStarted(usize, Result<Box<DMChannel>, String>),
+    FriendInput(String),
+    AddFriendSubmit,
+    AcceptFriend(i64),
+    RemoveFriend(i64),
+    FriendActionDone(usize, Result<(), String>),
+}
+
+/// Zone active de l'application connectée.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Route {
+    /// Vue serveur (guilde sélectionnée).
+    Guild,
+    /// Accueil : amis + messages privés.
+    Home,
 }
 
 /// Boîte de dialogue active (modale).
@@ -148,6 +170,13 @@ pub struct App {
     dialog: Option<Dialog>,
     dialog_name: String,
     dialog_code: String,
+    // Accueil (amis + MP).
+    route: Route,
+    /// MP ouvert en accueil (`None` = panneau Amis).
+    home_dm: Option<i64>,
+    dms: Vec<DMChannel>,
+    relationships: Vec<Relationship>,
+    friend_input: String,
 }
 
 /// Le formulaire d'authentification est-il complet (gate inclus si requis) ?
@@ -181,6 +210,11 @@ impl App {
                 dialog: None,
                 dialog_name: String::new(),
                 dialog_code: String::new(),
+                route: Route::Guild,
+                home_dm: None,
+                dms: Vec::new(),
+                relationships: Vec::new(),
+                friend_input: String::new(),
             },
             Task::none(),
         )
@@ -355,6 +389,10 @@ impl App {
                 self.members.clear();
                 self.presences.clear();
                 self.messages.clear();
+                self.dms.clear();
+                self.relationships.clear();
+                self.route = Route::Guild;
+                self.home_dm = None;
                 self.selected_guild = None;
                 self.selected_channel = None;
                 self.screen = Screen::Main;
@@ -377,6 +415,10 @@ impl App {
                     self.members.clear();
                     self.presences.clear();
                     self.messages.clear();
+                    self.dms.clear();
+                    self.relationships.clear();
+                    self.route = Route::Guild;
+                    self.home_dm = None;
                     self.selected_guild = None;
                     self.selected_channel = None;
                     self.screen = Screen::Main;
@@ -406,6 +448,8 @@ impl App {
                 let Some(idx) = self.current else {
                     return Task::none();
                 };
+                self.route = Route::Guild;
+                self.home_dm = None;
                 self.selected_guild = Some(gid);
                 self.channels.clear();
                 self.members.clear();
@@ -652,6 +696,155 @@ impl App {
                 self.status = format!("Salon : {e}");
                 Task::none()
             }
+            Message::GoHome => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                self.route = Route::Home;
+                self.home_dm = None;
+                let api = self.instances[idx].api.clone();
+                let dms = {
+                    let api = api.clone();
+                    Task::perform(
+                        async move { api.list_dm_channels().await.map_err(|e| e.to_string()) },
+                        move |r| Message::DmsLoaded(idx, r),
+                    )
+                };
+                let rels = Task::perform(
+                    async move { api.list_relationships().await.map_err(|e| e.to_string()) },
+                    move |r| Message::RelationshipsLoaded(idx, r),
+                );
+                Task::batch([dms, rels])
+            }
+            Message::DmsLoaded(idx, Ok(dms)) => {
+                if self.current == Some(idx) {
+                    self.dms = dms;
+                }
+                Task::none()
+            }
+            Message::DmsLoaded(_, Err(_)) => Task::none(),
+            Message::RelationshipsLoaded(idx, Ok(rels)) => {
+                if self.current == Some(idx) {
+                    self.relationships = rels;
+                }
+                Task::none()
+            }
+            Message::RelationshipsLoaded(_, Err(_)) => Task::none(),
+            Message::OpenDm(cid) => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                self.route = Route::Home;
+                self.home_dm = Some(cid);
+                self.selected_channel = Some(cid);
+                self.messages.clear();
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.list_messages(Snowflake::from_i64(cid))
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::MessagesLoaded(idx, r),
+                )
+            }
+            Message::StartDm(uid) => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let req = ozone_core::proto::dto::CreateDM {
+                    recipients: vec![Snowflake::from_i64(uid)],
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.open_or_create_dm(&req)
+                            .await
+                            .map(Box::new)
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::DmStarted(idx, r),
+                )
+            }
+            Message::DmStarted(idx, Ok(dm)) => {
+                if self.current == Some(idx) {
+                    let cid = dm.id.as_i64();
+                    if !self.dms.iter().any(|d| d.id.as_i64() == cid) {
+                        self.dms.push(*dm);
+                    }
+                    return self.update(Message::OpenDm(cid));
+                }
+                Task::none()
+            }
+            Message::DmStarted(_, Err(e)) => {
+                self.status = format!("MP : {e}");
+                Task::none()
+            }
+            Message::FriendInput(v) => {
+                self.friend_input = v;
+                Task::none()
+            }
+            Message::AddFriendSubmit => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let username = self.friend_input.trim().to_string();
+                if username.is_empty() {
+                    return Task::none();
+                }
+                self.friend_input.clear();
+                let req = ozone_core::proto::dto::AddRelationship {
+                    username,
+                    block: false,
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move { api.add_relationship(&req).await.map_err(|e| e.to_string()) },
+                    move |r| Message::FriendActionDone(idx, r),
+                )
+            }
+            Message::AcceptFriend(uid) => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.accept_relationship(Snowflake::from_i64(uid))
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::FriendActionDone(idx, r),
+                )
+            }
+            Message::RemoveFriend(uid) => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.remove_relationship(Snowflake::from_i64(uid))
+                            .await
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::FriendActionDone(idx, r),
+                )
+            }
+            Message::FriendActionDone(idx, Ok(())) => {
+                if self.current == Some(idx) {
+                    let api = self.instances[idx].api.clone();
+                    return Task::perform(
+                        async move { api.list_relationships().await.map_err(|e| e.to_string()) },
+                        move |r| Message::RelationshipsLoaded(idx, r),
+                    );
+                }
+                Task::none()
+            }
+            Message::FriendActionDone(_, Err(e)) => {
+                self.status = format!("Amis : {e}");
+                Task::none()
+            }
         }
     }
 
@@ -847,7 +1040,19 @@ impl App {
             .style(style::subtle)
             .on_press(Message::CycleTheme);
 
+        // Bouton « Accueil » (MP + amis), en haut du rail.
+        let home_btn = button(
+            container(text("🏠").size(20))
+                .center_x(Length::Fixed(48.0))
+                .center_y(Length::Fixed(48.0)),
+        )
+        .padding(0)
+        .style(style::guild_icon(self.route == Route::Home))
+        .on_press(Message::GoHome);
+
         let rail = column![
+            home_btn,
+            rail_divider(),
             instances,
             rail_divider(),
             scrollable(guilds).height(Length::Fill),
@@ -1001,8 +1206,179 @@ impl App {
     }
 
     fn main_view(&self) -> Element<'_, Message> {
-        row![self.channel_sidebar(), self.chat_view(), self.member_list(),]
+        match self.route {
+            Route::Guild => row![self.channel_sidebar(), self.chat_view(), self.member_list()]
+                .height(Length::Fill)
+                .into(),
+            Route::Home => row![self.home_sidebar(), self.home_main()]
+                .height(Length::Fill)
+                .into(),
+        }
+    }
+
+    /// Vue principale de l'accueil : panneau Amis ou fil d'un MP ouvert.
+    fn home_main(&self) -> Element<'_, Message> {
+        if self.home_dm.is_some() {
+            self.chat_view()
+        } else {
+            self.friends_panel()
+        }
+    }
+
+    /// Sidebar de l'accueil : bouton Amis + liste des MP + panneau utilisateur.
+    fn home_sidebar(&self) -> Element<'_, Message> {
+        let header = container(text("Accueil").size(16).color(style::color::header()))
+            .width(Length::Fill)
+            .padding(16)
+            .style(style::header_bar);
+        let friends_btn = button(text("👥  Amis").size(15))
+            .width(Length::Fill)
+            .padding(8)
+            .style(style::channel_item(self.home_dm.is_none()))
+            .on_press(Message::GoHome);
+        let me_label = self
+            .current
+            .map(|i| self.instances[i].user_label.clone())
+            .unwrap_or_default();
+        let mut list = column![
+            friends_btn,
+            text("MESSAGES PRIVÉS")
+                .size(11)
+                .color(style::color::muted()),
+        ]
+        .spacing(4)
+        .padding(8);
+        for dm in &self.dms {
+            let cid = dm.id.as_i64();
+            let name = dm_name(dm, &me_label);
+            list = list.push(
+                button(
+                    row![avatar(&name, 24.0), text(name.clone()).size(14)]
+                        .spacing(8)
+                        .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .padding(6)
+                .style(style::channel_item(self.home_dm == Some(cid)))
+                .on_press(Message::OpenDm(cid)),
+            );
+        }
+        let col = column![
+            header,
+            scrollable(list).height(Length::Fill),
+            self.user_panel(),
+        ]
+        .height(Length::Fill);
+        container(col)
+            .width(Length::Fixed(240.0))
             .height(Length::Fill)
+            .style(style::sidebar_bg)
+            .into()
+    }
+
+    /// Panneau Amis : ajout par pseudo + liste (demandes entrantes/sortantes, amis, bloqués).
+    fn friends_panel(&self) -> Element<'_, Message> {
+        let header = container(text("Amis").size(16).color(style::color::header()))
+            .width(Length::Fill)
+            .padding(16)
+            .style(style::header_bar);
+
+        let add = row![
+            text_input("Ajouter un ami par pseudo", &self.friend_input)
+                .on_input(Message::FriendInput)
+                .on_submit(Message::AddFriendSubmit)
+                .padding(10)
+                .style(style::input_field),
+            button(text("Ajouter"))
+                .on_press(Message::AddFriendSubmit)
+                .padding(10)
+                .style(style::primary),
+        ]
+        .spacing(8)
+        .padding(16);
+
+        let mut list = column![].spacing(6).padding(16);
+        for r in &self.relationships {
+            let name = r
+                .user
+                .display_name
+                .clone()
+                .unwrap_or_else(|| r.user.username.clone());
+            let uid = r.id.as_i64();
+            let status = self
+                .presences
+                .get(&uid)
+                .map(|s| s.as_str())
+                .unwrap_or("offline");
+            let mut actions = row![].spacing(6);
+            match r.kind {
+                RelationshipType::Incoming => {
+                    actions = actions.push(
+                        button(text("Accepter").size(13))
+                            .on_press(Message::AcceptFriend(uid))
+                            .padding(6)
+                            .style(style::primary),
+                    );
+                    actions = actions.push(
+                        button(text("Refuser").size(13))
+                            .on_press(Message::RemoveFriend(uid))
+                            .padding(6)
+                            .style(style::secondary),
+                    );
+                }
+                RelationshipType::Friend => {
+                    actions = actions.push(
+                        button(text("Message").size(13))
+                            .on_press(Message::StartDm(uid))
+                            .padding(6)
+                            .style(style::primary),
+                    );
+                    actions = actions.push(
+                        button(text("Retirer").size(13))
+                            .on_press(Message::RemoveFriend(uid))
+                            .padding(6)
+                            .style(style::secondary),
+                    );
+                }
+                RelationshipType::Outgoing => {
+                    actions = actions.push(
+                        button(text("Annuler").size(13))
+                            .on_press(Message::RemoveFriend(uid))
+                            .padding(6)
+                            .style(style::secondary),
+                    );
+                }
+                RelationshipType::Blocked => {
+                    actions = actions.push(
+                        button(text("Débloquer").size(13))
+                            .on_press(Message::RemoveFriend(uid))
+                            .padding(6)
+                            .style(style::secondary),
+                    );
+                }
+            }
+            list = list.push(
+                row![
+                    avatar(&name, 32.0),
+                    status_dot(status),
+                    text(name.clone())
+                        .size(15)
+                        .color(style::color::text())
+                        .width(Length::Fill),
+                    actions,
+                ]
+                .spacing(10)
+                .align_y(Alignment::Center),
+            );
+        }
+
+        let col = column![header, add, scrollable(list).height(Length::Fill)]
+            .width(Length::Fill)
+            .height(Length::Fill);
+        container(col)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(style::chat_bg)
             .into()
     }
 
@@ -1119,17 +1495,31 @@ impl App {
             .into()
     }
 
-    /// Zone de chat : en-tête du salon, fil de messages (avatars), composeur.
+    /// Zone de chat : en-tête (salon ou MP), fil de messages (avatars), composeur.
     fn chat_view(&self) -> Element<'_, Message> {
-        let chan = self
-            .channels
-            .iter()
-            .find(|c| Some(c.id.as_i64()) == self.selected_channel)
-            .map(|c| c.name.clone())
-            .unwrap_or_default();
+        let (chan, prefix) = if self.route == Route::Home {
+            let me_label = self
+                .current
+                .map(|i| self.instances[i].user_label.clone())
+                .unwrap_or_default();
+            let name = self
+                .home_dm
+                .and_then(|cid| self.dms.iter().find(|d| d.id.as_i64() == cid))
+                .map(|d| dm_name(d, &me_label))
+                .unwrap_or_default();
+            (name, "@")
+        } else {
+            let name = self
+                .channels
+                .iter()
+                .find(|c| Some(c.id.as_i64()) == self.selected_channel)
+                .map(|c| c.name.clone())
+                .unwrap_or_default();
+            (name, "#")
+        };
         let header = container(
             row![
-                text("#").size(20).color(style::color::muted()),
+                text(prefix).size(20).color(style::color::muted()),
                 text(chan.clone()).size(16).color(style::color::header()),
             ]
             .spacing(8)
@@ -1142,7 +1532,7 @@ impl App {
         // Fil : groupement des messages consécutifs d'un même auteur (façon Discord).
         let body: Element<Message> = if self.messages.is_empty() {
             container(
-                text(format!("C'est le tout début de #{chan}."))
+                text(format!("C'est le tout début de {prefix}{chan}."))
                     .size(14)
                     .color(style::color::muted()),
             )
@@ -1195,7 +1585,7 @@ impl App {
         let placeholder = if chan.is_empty() {
             "Envoyer un message".to_string()
         } else {
-            format!("Envoyer un message dans #{chan}")
+            format!("Envoyer un message dans {prefix}{chan}")
         };
         let composer = container(
             text_input(&placeholder, &self.composer)
@@ -1214,6 +1604,26 @@ impl App {
             .height(Length::Fill)
             .style(style::chat_bg)
             .into()
+    }
+}
+
+/// Nom affichable d'un MP : nom de groupe, sinon les destinataires (hors soi).
+fn dm_name(dm: &DMChannel, me_label: &str) -> String {
+    if let Some(n) = &dm.name {
+        if !n.is_empty() {
+            return n.clone();
+        }
+    }
+    let names: Vec<String> = dm
+        .recipients
+        .iter()
+        .map(|u| u.display_name.clone().unwrap_or_else(|| u.username.clone()))
+        .filter(|n| n != me_label)
+        .collect();
+    if names.is_empty() {
+        "Message privé".to_string()
+    } else {
+        names.join(", ")
     }
 }
 
@@ -1458,6 +1868,26 @@ mod tests {
         // Retour en mode connexion.
         let _ = app.update(Message::ToggleAuthMode);
         assert_eq!(app.auth_mode, AuthMode::Login);
+    }
+
+    #[test]
+    fn home_navigation_and_dm_open() {
+        let (mut app, _) = App::new();
+        // `InstanceChecked` fixe `current = Some(0)` (suffisant pour exercer la navigation).
+        let _ = app.update(Message::InstanceChecked(Ok(info("X", false))));
+        let _ = app.update(Message::GoHome);
+        assert_eq!(app.route, Route::Home);
+        assert_eq!(app.home_dm, None);
+        let _ = app.update(Message::OpenDm(77));
+        assert_eq!(app.route, Route::Home);
+        assert_eq!(app.home_dm, Some(77));
+        assert_eq!(app.selected_channel, Some(77));
+        let _ = app.update(Message::FriendInput("alice".into()));
+        assert_eq!(app.friend_input, "alice");
+        // Sélectionner une guilde ramène à la vue serveur.
+        let _ = app.update(Message::SelectGuild(5));
+        assert_eq!(app.route, Route::Guild);
+        assert_eq!(app.home_dm, None);
     }
 
     #[test]
