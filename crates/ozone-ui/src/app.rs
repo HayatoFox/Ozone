@@ -91,6 +91,20 @@ pub enum Message {
     AcceptFriend(i64),
     RemoveFriend(i64),
     FriendActionDone(usize, Result<(), String>),
+    // ── Paramètres ──
+    GoSettings,
+    CloseSettings,
+    SettingsDisplayInput(String),
+    SaveProfile,
+    SetStatus(String),
+    SettingsCurPwd(String),
+    SettingsNewPwd(String),
+    DoChangePassword,
+    SettingsEmail(String),
+    SettingsEmailPwd(String),
+    DoChangeEmail,
+    SettingsResult(usize, Result<(), String>),
+    Logout,
 }
 
 /// Zone active de l'application connectée.
@@ -100,6 +114,8 @@ enum Route {
     Guild,
     /// Accueil : amis + messages privés.
     Home,
+    /// Paramètres utilisateur (compte, présence, apparence).
+    Settings,
 }
 
 /// Boîte de dialogue active (modale).
@@ -177,6 +193,12 @@ pub struct App {
     dms: Vec<DMChannel>,
     relationships: Vec<Relationship>,
     friend_input: String,
+    // Champs du panneau Paramètres.
+    settings_display: String,
+    settings_cur_pwd: String,
+    settings_new_pwd: String,
+    settings_email: String,
+    settings_email_pwd: String,
 }
 
 /// Le formulaire d'authentification est-il complet (gate inclus si requis) ?
@@ -215,6 +237,11 @@ impl App {
                 dms: Vec::new(),
                 relationships: Vec::new(),
                 friend_input: String::new(),
+                settings_display: String::new(),
+                settings_cur_pwd: String::new(),
+                settings_new_pwd: String::new(),
+                settings_email: String::new(),
+                settings_email_pwd: String::new(),
             },
             Task::none(),
         )
@@ -845,6 +872,161 @@ impl App {
                 self.status = format!("Amis : {e}");
                 Task::none()
             }
+            Message::GoSettings => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                self.route = Route::Settings;
+                self.settings_display = self.instances[idx].user_label.clone();
+                self.settings_cur_pwd.clear();
+                self.settings_new_pwd.clear();
+                self.settings_email.clear();
+                self.settings_email_pwd.clear();
+                self.status.clear();
+                Task::none()
+            }
+            Message::CloseSettings => {
+                self.route = Route::Guild;
+                self.status.clear();
+                Task::none()
+            }
+            Message::SettingsDisplayInput(v) => {
+                self.settings_display = v;
+                Task::none()
+            }
+            Message::SettingsCurPwd(v) => {
+                self.settings_cur_pwd = v;
+                Task::none()
+            }
+            Message::SettingsNewPwd(v) => {
+                self.settings_new_pwd = v;
+                Task::none()
+            }
+            Message::SettingsEmail(v) => {
+                self.settings_email = v;
+                Task::none()
+            }
+            Message::SettingsEmailPwd(v) => {
+                self.settings_email_pwd = v;
+                Task::none()
+            }
+            Message::SaveProfile => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let display = self.settings_display.trim().to_string();
+                let update = ozone_core::proto::dto::UpdateProfile {
+                    display_name: Some(display.clone()),
+                    avatar_id: None,
+                    bio: None,
+                    pronouns: None,
+                    banner_id: None,
+                    accent_color: None,
+                };
+                self.instances[idx].user_label = display; // reflet local immédiat
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.update_profile(&update)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::SettingsResult(idx, r),
+                )
+            }
+            Message::SetStatus(s) => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let req = ozone_core::proto::dto::SetPresence {
+                    status: s,
+                    custom_status: None,
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.set_presence(&req)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::SettingsResult(idx, r),
+                )
+            }
+            Message::DoChangePassword => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                if self.settings_cur_pwd.is_empty() || self.settings_new_pwd.is_empty() {
+                    self.status = "Renseigne les deux mots de passe.".into();
+                    return Task::none();
+                }
+                let req = ozone_core::proto::dto::ChangePassword {
+                    current_password: std::mem::take(&mut self.settings_cur_pwd),
+                    new_password: std::mem::take(&mut self.settings_new_pwd),
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move { api.change_password(&req).await.map_err(|e| e.to_string()) },
+                    move |r| Message::SettingsResult(idx, r),
+                )
+            }
+            Message::DoChangeEmail => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                if self.settings_email.trim().is_empty() || self.settings_email_pwd.is_empty() {
+                    self.status = "Renseigne l'e-mail et le mot de passe.".into();
+                    return Task::none();
+                }
+                let req = ozone_core::proto::dto::ChangeEmail {
+                    new_email: self.settings_email.trim().to_string(),
+                    password: std::mem::take(&mut self.settings_email_pwd),
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.change_email(&req)
+                            .await
+                            .map(|_| ())
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::SettingsResult(idx, r),
+                )
+            }
+            Message::SettingsResult(idx, Ok(())) => {
+                if self.current == Some(idx) {
+                    self.status = "Enregistré ✓".into();
+                }
+                Task::none()
+            }
+            Message::SettingsResult(_, Err(e)) => {
+                self.status = format!("Paramètres : {e}");
+                Task::none()
+            }
+            Message::Logout => {
+                if let Some(idx) = self.current {
+                    self.instances[idx].api.set_token(None);
+                    self.instances[idx].token = None;
+                    self.instances[idx].authed = false;
+                    self.form_address = self.instances[idx].address.clone();
+                }
+                self.route = Route::Guild;
+                self.home_dm = None;
+                self.guilds.clear();
+                self.channels.clear();
+                self.members.clear();
+                self.presences.clear();
+                self.messages.clear();
+                self.dms.clear();
+                self.relationships.clear();
+                self.selected_guild = None;
+                self.selected_channel = None;
+                self.screen = Screen::Auth;
+                self.status.clear();
+                Task::none()
+            }
         }
     }
 
@@ -1213,7 +1395,102 @@ impl App {
             Route::Home => row![self.home_sidebar(), self.home_main()]
                 .height(Length::Fill)
                 .into(),
+            Route::Settings => self.settings_view(),
         }
+    }
+
+    /// Écran Paramètres : profil, présence, apparence, mot de passe, e-mail, déconnexion.
+    fn settings_view(&self) -> Element<'_, Message> {
+        let presence_btn = |label: &'static str, status: &'static str| {
+            button(text(label).size(13))
+                .padding(8)
+                .style(style::secondary)
+                .on_press(Message::SetStatus(status.to_string()))
+        };
+        let sect = |t: &'static str| text(t).size(11).color(style::color::muted());
+
+        let form = column![
+            row![
+                text("Paramètres")
+                    .size(22)
+                    .color(style::color::header())
+                    .width(Length::Fill),
+                button(text("Fermer"))
+                    .on_press(Message::CloseSettings)
+                    .padding(8)
+                    .style(style::secondary),
+            ]
+            .align_y(Alignment::Center),
+            sect("PROFIL"),
+            text_input("Nom affiché", &self.settings_display)
+                .on_input(Message::SettingsDisplayInput)
+                .padding(10)
+                .style(style::input_field),
+            button(text("Enregistrer le profil"))
+                .on_press(Message::SaveProfile)
+                .padding(10)
+                .style(style::primary),
+            sect("PRÉSENCE"),
+            row![
+                presence_btn("En ligne", "online"),
+                presence_btn("Absent", "idle"),
+                presence_btn("Ne pas déranger", "dnd"),
+                presence_btn("Invisible", "invisible"),
+            ]
+            .spacing(6),
+            sect("APPARENCE"),
+            button(text("Changer de thème"))
+                .on_press(Message::CycleTheme)
+                .padding(10)
+                .style(style::secondary),
+            sect("MOT DE PASSE"),
+            text_input("Mot de passe actuel", &self.settings_cur_pwd)
+                .secure(true)
+                .on_input(Message::SettingsCurPwd)
+                .padding(10)
+                .style(style::input_field),
+            text_input("Nouveau mot de passe", &self.settings_new_pwd)
+                .secure(true)
+                .on_input(Message::SettingsNewPwd)
+                .padding(10)
+                .style(style::input_field),
+            button(text("Changer le mot de passe"))
+                .on_press(Message::DoChangePassword)
+                .padding(10)
+                .style(style::secondary),
+            sect("E-MAIL"),
+            text_input("Nouvel e-mail", &self.settings_email)
+                .on_input(Message::SettingsEmail)
+                .padding(10)
+                .style(style::input_field),
+            text_input("Mot de passe (confirmation)", &self.settings_email_pwd)
+                .secure(true)
+                .on_input(Message::SettingsEmailPwd)
+                .padding(10)
+                .style(style::input_field),
+            button(text("Changer l'e-mail"))
+                .on_press(Message::DoChangeEmail)
+                .padding(10)
+                .style(style::secondary),
+            button(text("Se déconnecter"))
+                .on_press(Message::Logout)
+                .padding(10)
+                .width(Length::Fill)
+                .style(style::secondary),
+            text(self.status.clone())
+                .size(13)
+                .color(style::color::muted()),
+        ]
+        .spacing(10)
+        .max_width(480)
+        .padding(24);
+
+        container(scrollable(form))
+            .center_x(Length::Fill)
+            .width(Length::Fill)
+            .height(Length::Fill)
+            .style(style::chat_bg)
+            .into()
     }
 
     /// Vue principale de l'accueil : panneau Amis ou fil d'un MP ouvert.
@@ -1485,10 +1762,18 @@ impl App {
             text("En ligne").size(11).color(style::color::green()),
         ]
         .spacing(1);
-        let panel = row![avatar(&label, 32.0), info]
-            .spacing(8)
-            .align_y(Alignment::Center)
-            .padding(8);
+        let gear = button(text("⚙").size(16))
+            .padding(6)
+            .style(style::subtle)
+            .on_press(Message::GoSettings);
+        let panel = row![
+            avatar(&label, 32.0),
+            container(info).width(Length::Fill),
+            gear,
+        ]
+        .spacing(8)
+        .align_y(Alignment::Center)
+        .padding(8);
         container(panel)
             .width(Length::Fill)
             .style(style::user_panel_bg)
@@ -1868,6 +2153,31 @@ mod tests {
         // Retour en mode connexion.
         let _ = app.update(Message::ToggleAuthMode);
         assert_eq!(app.auth_mode, AuthMode::Login);
+    }
+
+    #[test]
+    fn settings_navigation_and_logout() {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::InstanceChecked(Ok(info("X", false))));
+        let tokens = Box::new(
+            serde_json::from_value::<TokenPair>(serde_json::json!({
+                "access_token": "a", "refresh_token": "r",
+                "token_type": "Bearer", "expires_in": 600
+            }))
+            .unwrap(),
+        );
+        let _ = app.update(Message::Authenticated(0, Ok(tokens)));
+        assert!(app.instances[0].authed);
+        let _ = app.update(Message::GoSettings);
+        assert_eq!(app.route, Route::Settings);
+        let _ = app.update(Message::SettingsDisplayInput("Alice".into()));
+        assert_eq!(app.settings_display, "Alice");
+        let _ = app.update(Message::CloseSettings);
+        assert_eq!(app.route, Route::Guild);
+        // Déconnexion : l'instance redevient non authentifiée et on retourne à l'écran d'auth.
+        let _ = app.update(Message::Logout);
+        assert!(!app.instances[0].authed);
+        assert_eq!(app.screen, Screen::Auth);
     }
 
     #[test]
