@@ -14,10 +14,13 @@ use iced::widget::{button, column, container, row, scrollable, text, text_input}
 use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 
 use crate::style;
-use ozone_core::proto::dto::{Channel, Guild, InstanceInfo, Message as ChatMessage, TokenPair};
+use ozone_core::proto::dto::{
+    Channel, Guild, InstanceInfo, Member, Message as ChatMessage, PresenceView, TokenPair,
+};
 use ozone_core::proto::gateway::GatewayFrame;
 use ozone_core::proto::Snowflake;
 use ozone_core::{ApiClient, InstanceRef};
+use std::collections::HashMap;
 
 use crate::theme::ThemeChoice;
 
@@ -49,6 +52,8 @@ pub enum Message {
     GuildsLoaded(usize, Result<Vec<Guild>, String>),
     SelectGuild(i64),
     ChannelsLoaded(usize, Result<Vec<Channel>, String>),
+    MembersLoaded(usize, Result<Vec<Member>, String>),
+    PresencesLoaded(usize, Result<Vec<PresenceView>, String>),
     SelectChannel(i64),
     MessagesLoaded(usize, Result<Vec<ChatMessage>, String>),
     ComposerChanged(String),
@@ -111,6 +116,9 @@ pub struct App {
     // Données de l'instance courante.
     guilds: Vec<Guild>,
     channels: Vec<Channel>,
+    members: Vec<Member>,
+    /// Statut effectif par utilisateur (`online`/`idle`/`dnd`/`offline`), alimenté par la Gateway.
+    presences: HashMap<i64, String>,
     messages: Vec<ChatMessage>,
     selected_guild: Option<i64>,
     selected_channel: Option<i64>,
@@ -139,6 +147,8 @@ impl App {
                 status: String::new(),
                 guilds: Vec::new(),
                 channels: Vec::new(),
+                members: Vec::new(),
+                presences: HashMap::new(),
                 messages: Vec::new(),
                 selected_guild: None,
                 selected_channel: None,
@@ -315,6 +325,8 @@ impl App {
                 self.status.clear();
                 self.guilds.clear();
                 self.channels.clear();
+                self.members.clear();
+                self.presences.clear();
                 self.messages.clear();
                 self.selected_guild = None;
                 self.selected_channel = None;
@@ -335,6 +347,8 @@ impl App {
                 if self.instances[idx].authed {
                     self.guilds.clear();
                     self.channels.clear();
+                    self.members.clear();
+                    self.presences.clear();
                     self.messages.clear();
                     self.selected_guild = None;
                     self.selected_channel = None;
@@ -367,18 +381,47 @@ impl App {
                 };
                 self.selected_guild = Some(gid);
                 self.channels.clear();
+                self.members.clear();
                 self.messages.clear();
                 self.selected_channel = None;
+                let gsnow = Snowflake::from_i64(gid);
                 let api = self.instances[idx].api.clone();
-                Task::perform(
-                    async move {
-                        api.list_channels(Snowflake::from_i64(gid))
-                            .await
-                            .map_err(|e| e.to_string())
-                    },
-                    move |r| Message::ChannelsLoaded(idx, r),
-                )
+                let channels = {
+                    let api = api.clone();
+                    Task::perform(
+                        async move { api.list_channels(gsnow).await.map_err(|e| e.to_string()) },
+                        move |r| Message::ChannelsLoaded(idx, r),
+                    )
+                };
+                let members = {
+                    let api = api.clone();
+                    Task::perform(
+                        async move { api.list_members(gsnow).await.map_err(|e| e.to_string()) },
+                        move |r| Message::MembersLoaded(idx, r),
+                    )
+                };
+                let presences = Task::perform(
+                    async move { api.list_presences(gsnow).await.map_err(|e| e.to_string()) },
+                    move |r| Message::PresencesLoaded(idx, r),
+                );
+                Task::batch([channels, members, presences])
             }
+            Message::MembersLoaded(idx, Ok(members)) => {
+                if self.current == Some(idx) {
+                    self.members = members;
+                }
+                Task::none()
+            }
+            Message::MembersLoaded(_, Err(_)) => Task::none(),
+            Message::PresencesLoaded(idx, Ok(list)) => {
+                if self.current == Some(idx) {
+                    for p in list {
+                        self.presences.insert(p.user_id.as_i64(), p.status);
+                    }
+                }
+                Task::none()
+            }
+            Message::PresencesLoaded(_, Err(_)) => Task::none(),
             Message::ChannelsLoaded(idx, Ok(channels)) => {
                 if self.current != Some(idx) {
                     return Task::none();
@@ -497,7 +540,15 @@ impl App {
                     }
                 }
             }
-            _ => {} // présence, salons, guildes : ignorés pour ce fil (à étoffer)
+            "PRESENCE_UPDATE" => {
+                if let (Some(uid), Some(status)) = (
+                    frame_id(d, "user_id"),
+                    d.get("status").and_then(|v| v.as_str()),
+                ) {
+                    self.presences.insert(uid, status.to_string());
+                }
+            }
+            _ => {} // salons/guildes temps réel : à étoffer
         }
     }
 
@@ -715,8 +766,48 @@ impl App {
     }
 
     fn main_view(&self) -> Element<'_, Message> {
-        row![self.channel_sidebar(), self.chat_view()]
+        row![self.channel_sidebar(), self.chat_view(), self.member_list(),]
             .height(Length::Fill)
+            .into()
+    }
+
+    /// Panneau des membres (à droite) : avatar + pastille de présence + nom.
+    fn member_list(&self) -> Element<'_, Message> {
+        let mut list = column![text(format!("MEMBRES — {}", self.members.len()))
+            .size(11)
+            .color(style::color::muted())]
+        .spacing(6)
+        .padding(8);
+        for m in &self.members {
+            let name = m
+                .nick
+                .clone()
+                .or_else(|| m.user.display_name.clone())
+                .unwrap_or_else(|| m.user.username.clone());
+            let status = self
+                .presences
+                .get(&m.user.id.as_i64())
+                .map(|s| s.as_str())
+                .unwrap_or("offline");
+            let name_color = if status == "offline" {
+                style::color::muted()
+            } else {
+                style::color::text()
+            };
+            list = list.push(
+                row![
+                    avatar(&name, 28.0),
+                    status_dot(status),
+                    text(name.clone()).size(14).color(name_color),
+                ]
+                .spacing(8)
+                .align_y(Alignment::Center),
+            );
+        }
+        container(scrollable(list).height(Length::Fill))
+            .width(Length::Fixed(220.0))
+            .height(Length::Fill)
+            .style(style::member_bg)
             .into()
     }
 
@@ -889,6 +980,25 @@ fn rail_icon<'a>(label: &str, selected: bool, msg: Message) -> Element<'a, Messa
     .style(style::guild_icon(selected))
     .on_press(msg)
     .into()
+}
+
+/// Couleur d'une pastille de présence.
+fn presence_color(status: &str) -> Color {
+    match status {
+        "online" => style::color::green(),
+        "idle" => style::color::idle(),
+        "dnd" => style::color::dnd(),
+        _ => style::color::muted(),
+    }
+}
+
+/// Petite pastille de présence (10 px).
+fn status_dot<'a>(status: &str) -> Element<'a, Message> {
+    container(text(" "))
+        .width(Length::Fixed(10.0))
+        .height(Length::Fixed(10.0))
+        .style(style::dot(presence_color(status), 5.0))
+        .into()
 }
 
 /// Fin séparateur horizontal du rail.

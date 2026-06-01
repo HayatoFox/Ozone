@@ -39,7 +39,13 @@ pub mod color {
     }
     pub fn green() -> Color {
         Color::from_rgb8(0x23, 0xa5, 0x5a)
-    }
+    } // en ligne
+    pub fn idle() -> Color {
+        Color::from_rgb8(0xf0, 0xb2, 0x32)
+    } // absent
+    pub fn dnd() -> Color {
+        Color::from_rgb8(0xf2, 0x3f, 0x42)
+    } // ne pas déranger
     pub fn text() -> Color {
         Color::from_rgb8(0xdb, 0xde, 0xe1)
     } // texte normal
@@ -87,6 +93,9 @@ pub fn chat_bg(_t: &Theme) -> container::Style {
 }
 pub fn user_panel_bg(_t: &Theme) -> container::Style {
     filled(color::user_panel())
+}
+pub fn member_bg(_t: &Theme) -> container::Style {
+    filled(color::sidebar())
 }
 
 /// En-tête avec une légère ombre portée vers le bas (effet d'élévation Discord).
