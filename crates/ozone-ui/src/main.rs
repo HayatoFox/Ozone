@@ -14,5 +14,10 @@ fn main() -> iced::Result {
     iced::application("Ozone", App::update, App::view)
         .subscription(App::subscription)
         .theme(App::theme)
+        .window(iced::window::Settings {
+            size: iced::Size::new(1180.0, 760.0),
+            min_size: Some(iced::Size::new(940.0, 560.0)),
+            ..iced::window::Settings::default()
+        })
         .run_with(App::new)
 }
