@@ -16,7 +16,7 @@ use iced::{Alignment, Color, Element, Length, Subscription, Task, Theme};
 use crate::style;
 use ozone_core::proto::dto::{
     Channel, DMChannel, Guild, InstanceInfo, Member, Message as ChatMessage, PresenceView,
-    Relationship, RelationshipType, TokenPair,
+    Relationship, RelationshipType, TokenPair, UserProfile,
 };
 use ozone_core::proto::gateway::GatewayFrame;
 use ozone_core::proto::Snowflake;
@@ -105,6 +105,10 @@ pub enum Message {
     DoChangeEmail,
     SettingsResult(usize, Result<(), String>),
     Logout,
+    // ── Profils ──
+    ViewProfile(i64),
+    ProfileLoaded(usize, Result<Box<UserProfile>, String>),
+    AddFriendByName(String),
 }
 
 /// Zone active de l'application connectée.
@@ -125,6 +129,8 @@ pub enum Dialog {
     AddGuild,
     /// Créer un salon dans la guilde courante.
     CreateChannel,
+    /// Fiche de profil d'un utilisateur (contenu dans `viewed_profile`).
+    Profile,
 }
 
 /// Mode de l'écran d'authentification.
@@ -186,6 +192,8 @@ pub struct App {
     dialog: Option<Dialog>,
     dialog_name: String,
     dialog_code: String,
+    /// Profil chargé pour la modale `Dialog::Profile`.
+    viewed_profile: Option<Box<UserProfile>>,
     // Accueil (amis + MP).
     route: Route,
     /// MP ouvert en accueil (`None` = panneau Amis).
@@ -232,6 +240,7 @@ impl App {
                 dialog: None,
                 dialog_name: String::new(),
                 dialog_code: String::new(),
+                viewed_profile: None,
                 route: Route::Guild,
                 home_dm: None,
                 dms: Vec::new(),
@@ -761,6 +770,7 @@ impl App {
                 let Some(idx) = self.current else {
                     return Task::none();
                 };
+                self.dialog = None; // ferme une éventuelle fiche de profil
                 self.route = Route::Home;
                 self.home_dm = Some(cid);
                 self.selected_channel = Some(cid);
@@ -1027,6 +1037,49 @@ impl App {
                 self.status.clear();
                 Task::none()
             }
+            Message::ViewProfile(uid) => {
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                self.viewed_profile = None;
+                self.dialog = Some(Dialog::Profile);
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move {
+                        api.user_profile(Snowflake::from_i64(uid))
+                            .await
+                            .map(Box::new)
+                            .map_err(|e| e.to_string())
+                    },
+                    move |r| Message::ProfileLoaded(idx, r),
+                )
+            }
+            Message::ProfileLoaded(idx, Ok(p)) => {
+                if self.current == Some(idx) && self.dialog == Some(Dialog::Profile) {
+                    self.viewed_profile = Some(p);
+                }
+                Task::none()
+            }
+            Message::ProfileLoaded(_, Err(e)) => {
+                self.dialog = None;
+                self.status = format!("Profil : {e}");
+                Task::none()
+            }
+            Message::AddFriendByName(username) => {
+                self.dialog = None;
+                let Some(idx) = self.current else {
+                    return Task::none();
+                };
+                let req = ozone_core::proto::dto::AddRelationship {
+                    username,
+                    block: false,
+                };
+                let api = self.instances[idx].api.clone();
+                Task::perform(
+                    async move { api.add_relationship(&req).await.map_err(|e| e.to_string()) },
+                    move |r| Message::FriendActionDone(idx, r),
+                )
+            }
         }
     }
 
@@ -1150,6 +1203,43 @@ impl App {
             ]
             .spacing(10)
             .max_width(360),
+            Dialog::Profile => {
+                if let Some(p) = &self.viewed_profile {
+                    let name = p.display_name.clone().unwrap_or_else(|| p.username.clone());
+                    let uid = p.id.as_i64();
+                    let mut c = column![
+                        avatar(&name, 64.0),
+                        text(name.clone()).size(20).color(style::color::header()),
+                        text(format!("@{}", p.username))
+                            .size(13)
+                            .color(style::color::muted()),
+                    ]
+                    .spacing(8)
+                    .max_width(340);
+                    if let Some(bio) = p.bio.as_ref().filter(|s| !s.is_empty()) {
+                        c = c.push(text(bio.clone()).size(14).color(style::color::text()));
+                    }
+                    if let Some(pr) = p.pronouns.as_ref().filter(|s| !s.is_empty()) {
+                        c = c.push(text(pr.clone()).size(12).color(style::color::muted()));
+                    }
+                    c.push(
+                        row![
+                            button(text("Message"))
+                                .on_press(Message::StartDm(uid))
+                                .padding(10)
+                                .style(style::primary),
+                            button(text("Ajouter en ami"))
+                                .on_press(Message::AddFriendByName(p.username.clone()))
+                                .padding(10)
+                                .style(style::secondary),
+                        ]
+                        .spacing(8),
+                    )
+                } else {
+                    column![text("Chargement…").size(14).color(style::color::muted())]
+                        .max_width(340)
+                }
+            }
         };
         if !self.status.is_empty() {
             card = card.push(
@@ -1683,13 +1773,19 @@ impl App {
                 style::color::text()
             };
             list = list.push(
-                row![
-                    avatar(&name, 28.0),
-                    status_dot(status),
-                    text(name.clone()).size(14).color(name_color),
-                ]
-                .spacing(8)
-                .align_y(Alignment::Center),
+                button(
+                    row![
+                        avatar(&name, 28.0),
+                        status_dot(status),
+                        text(name.clone()).size(14).color(name_color),
+                    ]
+                    .spacing(8)
+                    .align_y(Alignment::Center),
+                )
+                .width(Length::Fill)
+                .padding(4)
+                .style(style::channel_item(false))
+                .on_press(Message::ViewProfile(m.user.id.as_i64())),
             );
         }
         container(scrollable(list).height(Length::Fill))
@@ -1857,7 +1953,11 @@ impl App {
                         text(m.content.clone()).size(15).color(style::color::text())
                     ]
                     .spacing(2);
-                    feed = feed.push(row![avatar(&author, 40.0), col].spacing(12));
+                    let av = button(avatar(&author, 40.0))
+                        .padding(0)
+                        .style(style::subtle)
+                        .on_press(Message::ViewProfile(aid));
+                    feed = feed.push(row![av, col].spacing(12));
                 }
                 prev = Some(aid);
             }
@@ -2198,6 +2298,28 @@ mod tests {
         let _ = app.update(Message::SelectGuild(5));
         assert_eq!(app.route, Route::Guild);
         assert_eq!(app.home_dm, None);
+    }
+
+    #[test]
+    fn view_profile_opens_and_closes() {
+        let (mut app, _) = App::new();
+        let _ = app.update(Message::InstanceChecked(Ok(info("X", false))));
+        let _ = app.update(Message::ViewProfile(42));
+        assert_eq!(app.dialog, Some(Dialog::Profile));
+        assert!(app.viewed_profile.is_none());
+        let profile = Box::new(
+            serde_json::from_value::<UserProfile>(serde_json::json!({
+                "id": "42", "username": "bob", "display_name": "Bob", "avatar_id": null,
+                "bio": "salut", "pronouns": null, "banner_id": null, "accent_color": null,
+                "created_at": 0
+            }))
+            .unwrap(),
+        );
+        let _ = app.update(Message::ProfileLoaded(0, Ok(profile)));
+        assert!(app.viewed_profile.is_some());
+        // Ouvrir un MP ferme la fiche de profil.
+        let _ = app.update(Message::OpenDm(99));
+        assert!(app.dialog.is_none());
     }
 
     #[test]
