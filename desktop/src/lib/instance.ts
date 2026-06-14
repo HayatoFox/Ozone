@@ -41,14 +41,31 @@ export function setInstanceUrl(url: string | null, prefix = "/api"): void {
 }
 
 /**
- * Faut-il demander l'URL d'instance ? Vrai dans un build empaqueté (origine non-HTTP, p. ex.
- * `tauri:`) tant qu'aucune instance n'est configurée. En mode navigateur, on ne demande jamais
- * (l'origine sert l'API).
+ * Sommes-nous dans le client empaqueté (Tauri) plutôt que dans un navigateur web ?
+ *
+ * On NE peut PAS se fier au protocole : Tauri v2 sert le front via `http(s)://tauri.localhost`
+ * (Windows) ou `tauri://localhost` (macOS/Linux) — donc `location.protocol` vaut souvent `http:`.
+ * On détecte la présence des objets injectés par le runtime Tauri dans `window`, et en repli
+ * l'hôte `tauri.localhost`.
+ */
+export function isPackaged(): boolean {
+  if (typeof window === "undefined") return false;
+  const w = window as unknown as Record<string, unknown>;
+  if ("__TAURI_INTERNALS__" in w || "__TAURI__" in w || "__TAURI_METADATA__" in w) return true;
+  if (typeof location !== "undefined") {
+    const h = location.hostname;
+    if (h === "tauri.localhost" || location.protocol === "tauri:") return true;
+  }
+  return false;
+}
+
+/**
+ * Faut-il demander l'URL d'instance ? Vrai dans le client empaqueté tant qu'aucune instance n'est
+ * configurée. En mode navigateur web, jamais (l'origine sert l'API).
  */
 export function needsInstanceUrl(): boolean {
   if (instanceBase) return false;
-  if (typeof location === "undefined") return false;
-  return location.protocol !== "http:" && location.protocol !== "https:";
+  return isPackaged();
 }
 
 /** Base HTTP des routes REST. Mode origine : `/api`. Mode instance : `<url><prefix>`. */
