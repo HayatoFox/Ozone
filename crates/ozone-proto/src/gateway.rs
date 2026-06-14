@@ -10,6 +10,8 @@ pub mod opcode {
     pub const IDENTIFY: u8 = 2;
     pub const PRESENCE_UPDATE: u8 = 3;
     pub const VOICE_STATE_UPDATE: u8 = 4;
+    /// Uplink : le client signale qu'il parle / se tait (indicateur vocal temps réel).
+    pub const VOICE_SPEAKING: u8 = 5;
     pub const RESUME: u8 = 6;
     pub const RECONNECT: u8 = 7;
     pub const INVALID_SESSION: u8 = 9;

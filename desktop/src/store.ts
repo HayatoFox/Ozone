@@ -1602,6 +1602,18 @@ function applyEvent(
       }
       break;
     }
+    case "VOICE_SPEAKING": {
+      // Indicateur « parle » d'un AUTRE membre, diffusé par le serveur. Source autoritative pour
+      // tout le monde sauf moi (mon propre indicateur est piloté localement par onSpeaking).
+      const d = ev.d as { user_id: Snowflake; speaking: boolean };
+      if (d.user_id === get().me?.id) break;
+      set((s) =>
+        !!s.speaking[d.user_id] === d.speaking
+          ? {}
+          : { speaking: { ...s.speaking, [d.user_id]: d.speaking } },
+      );
+      break;
+    }
     case "GUILD_CREATE": {
       const g = ev.d as Guild;
       set((s) =>
@@ -2041,20 +2053,28 @@ function newVoiceConn(get: GetFn, set: SetFn): VoiceConnection {
     onVideoEnded: (trackId) =>
       set((s) => ({ voiceVideos: s.voiceVideos.filter((x) => x.trackId !== trackId) })),
     onSpeaking: (userId, on) => {
+      const myId = get().me?.id;
+      // L'état « parle » des AUTRES est désormais autoritatif via le broadcast Gateway
+      // (VOICE_SPEAKING) — il marche même quand on ne reçoit pas leur audio (sourd, volume 0).
+      // La détection locale ne pilote donc QUE mon propre indicateur (+ le gate de voix).
+      if (userId !== myId) return;
+
+      vadOpen = on;
+      applyMicGate();
+      // N'allume l'anneau « parle » que si mon micro est RÉELLEMENT ouvert : en PTT sans tenir la
+      // touche, le détecteur (clone non gaté) capte ma voix mais rien n'est transmis.
       let effective = on;
-      // Mon propre flux pilote le gate de voix (mode « détection »).
-      if (userId === get().me?.id) {
-        vadOpen = on;
-        applyMicGate();
-        // N'allume l'anneau « parle » que si mon micro est RÉELLEMENT ouvert : en PTT sans tenir
-        // la touche, le détecteur (clone non gaté) capte ma voix mais rien n'est transmis.
-        if (get().mediaPrefs.inputMode === "ptt" && !pttHeld) effective = false;
-      }
+      if (get().mediaPrefs.inputMode === "ptt" && !pttHeld) effective = false;
+      const mute = get().myVoice?.selfMute || get().myVoice?.serverMute;
+      if (mute) effective = false; // muet ⇒ jamais « parle »
+
       set((s) =>
         !!s.speaking[userId] === effective
           ? {}
           : { speaking: { ...s.speaking, [userId]: effective } },
       );
+      // Diffuse mon état aux autres membres du salon (ne fire que sur transition → throttlé).
+      gateway?.sendVoiceSpeaking(effective);
     },
     // Repli : si la renégociation/WS échoue, on reconnecte complètement (comportement historique).
     onNeedsReconnect: () => {

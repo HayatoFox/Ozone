@@ -9,6 +9,7 @@ const OP = {
   DISPATCH: 0,
   HEARTBEAT: 1,
   IDENTIFY: 2,
+  VOICE_SPEAKING: 5, // uplink : je parle / je me tais (indicateur vocal temps réel)
   RESUME: 6,
   RECONNECT: 7,
   INVALID_SESSION: 9,
@@ -195,6 +196,11 @@ export class Gateway {
     if (this.ws?.readyState === WebSocket.OPEN) {
       this.ws.send(JSON.stringify(frame));
     }
+  }
+
+  /** Signale au serveur que je parle / me tais (relayé aux autres membres de mon salon vocal). */
+  sendVoiceSpeaking(speaking: boolean): void {
+    this.send({ op: OP.VOICE_SPEAKING, d: { speaking } });
   }
 
   close(): void {

@@ -59,7 +59,7 @@ async fn handle_socket(socket: WebSocket, st: AppState) {
                     conn.close();
                     return;
                 }
-                pump(&mut tx, &mut rx_ws, &conn, &mut sink_rx).await;
+                pump(&mut tx, &mut rx_ws, &conn, &mut sink_rx, &st, uid.as_i64()).await;
                 return;
             }
             opcode::RESUME => {
@@ -91,7 +91,7 @@ async fn handle_socket(socket: WebSocket, st: AppState) {
                             conn.close();
                             return;
                         }
-                        pump(&mut tx, &mut rx_ws, &conn, &mut sink_rx).await;
+                        pump(&mut tx, &mut rx_ws, &conn, &mut sink_rx, &st, uid.as_i64()).await;
                         return;
                     }
                     // Tampon dépassé (trop d'événements manqués) ⇒ le client doit re-IDENTIFY.
@@ -138,6 +138,8 @@ async fn pump(
     rx_ws: &mut SplitStream<WebSocket>,
     conn: &SessionConn,
     sink_rx: &mut mpsc::UnboundedReceiver<GatewayFrame>,
+    st: &AppState,
+    uid: i64,
 ) {
     loop {
         tokio::select! {
@@ -153,13 +155,24 @@ async fn pump(
             inc = rx_ws.next() => match inc {
                 Some(Ok(Message::Text(txt))) => {
                     if let Ok(f) = serde_json::from_str::<GatewayFrame>(&txt) {
-                        if f.op == opcode::HEARTBEAT
-                            && send_frame(tx, &GatewayFrame::new(opcode::HEARTBEAT_ACK))
+                        if f.op == opcode::HEARTBEAT {
+                            if send_frame(tx, &GatewayFrame::new(opcode::HEARTBEAT_ACK))
                                 .await
                                 .is_err()
-                        {
-                            conn.detach();
-                            return;
+                            {
+                                conn.detach();
+                                return;
+                            }
+                        } else if f.op == opcode::VOICE_SPEAKING {
+                            // Le client signale parle/se-tait. On relaie aux autres membres de SON
+                            // salon vocal (salon lu côté serveur depuis voice_states → non spoofable).
+                            let speaking = f
+                                .d
+                                .as_ref()
+                                .and_then(|d| d.get("speaking"))
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
+                            broadcast_speaking(st, uid, speaking).await;
                         }
                     }
                 }
@@ -195,6 +208,30 @@ pub async fn broadcast_presence(st: &AppState, uid: i64) {
         let gid: i64 = g.get("guild_id");
         st.publish(EventScope::Guild(gid), "PRESENCE_UPDATE", payload.clone());
     }
+}
+
+/// Diffuse l'indicateur « parle / se tait » d'un utilisateur aux autres membres de SON salon
+/// vocal. Le salon est lu côté serveur depuis `voice_states` (l'uid vient de la session
+/// authentifiée → non spoofable). Portée `Channel` ⇒ seuls les membres du salon le reçoivent.
+async fn broadcast_speaking(st: &AppState, uid: i64, speaking: bool) {
+    let row = sqlx::query("SELECT guild_id, channel_id FROM voice_states WHERE user_id = ?")
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await
+        .ok()
+        .flatten();
+    let Some(row) = row else { return }; // pas connecté au vocal → rien à diffuser
+    let gid: i64 = row.get("guild_id");
+    let cid: Option<i64> = row.get("channel_id");
+    let Some(cid) = cid else { return };
+    st.publish(
+        EventScope::Channel {
+            guild_id: gid,
+            channel_id: cid,
+        },
+        "VOICE_SPEAKING",
+        json!({ "user_id": uid.to_string(), "speaking": speaking }),
+    );
 }
 
 /// Diffuse le **profil public** (pseudo/avatar) mis à jour d'un utilisateur EN DIRECT à toutes
