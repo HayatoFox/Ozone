@@ -1,6 +1,7 @@
 // Client REST typé pour le serveur Ozone (ozone-api).
-// Base `/api` (réécrite vers le serveur par le proxy Vite en dev). Auth Bearer.
+// Base `/api` (origine, proxy Vite en dev) ou `<instance>/api` (build empaqueté). Auth Bearer.
 
+import { apiBase } from "./lib/instance";
 import type {
   AddRelationship,
   Attachment,
@@ -77,7 +78,9 @@ import type {
   Webhook,
 } from "./types";
 
-const BASE = "/api";
+// Base des routes REST : `/api` (origine) ou `<instance>/api` (.exe). Résolue à CHAQUE appel
+// (l'URL d'instance peut être définie après le chargement initial du module).
+const BASE = (): string => apiBase();
 
 // ───────────────────────────── État du token ─────────────────────────────
 
@@ -190,7 +193,7 @@ interface ReqOpts {
 async function request<T>(path: string, opts: ReqOpts = {}): Promise<T> {
   const { method = "GET", body, auth = true, query } = opts;
 
-  let url = BASE + path;
+  let url = BASE() + path;
   if (query) {
     const qs = new URLSearchParams();
     for (const [k, v] of Object.entries(query)) {
@@ -253,7 +256,7 @@ const del = <T>(p: string, body?: unknown) => request<T>(p, { method: "DELETE", 
 async function requestForm<T>(path: string, form: FormData, retried = false): Promise<T> {
   const headers: Record<string, string> = {};
   if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-  const res = await fetch(BASE + path, { method: "POST", headers, body: form });
+  const res = await fetch(BASE() + path, { method: "POST", headers, body: form });
   if (res.status === 401 && !retried) {
     if (await refreshTokens()) return requestForm<T>(path, form, true);
   }

@@ -4,6 +4,7 @@ import { Compass, Plus } from "lucide-react";
 import { api } from "../api";
 import { guildHasUnread, guildMentionCount, isMuted, useStore } from "../store";
 import { initials } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 import { OVERLAY_ANIM } from "../lib/anim";
 import { Tip } from "./ui/Tooltip";
 import { DiscoveryModal } from "./DiscoveryModal";
@@ -59,7 +60,7 @@ export function ServerRail() {
                     // `?v=` = cache-buster sur l'id d'image → l'icône se rafraîchit en direct au
                     // changement (via l'événement GUILD_UPDATE qui met à jour g.icon_id).
                     <img
-                      src={`/api/guilds/${g.id}/icon?v=${g.icon_id}`}
+                      src={mediaUrl(`/api/guilds/${g.id}/icon?v=${g.icon_id}`)}
                       alt=""
                       className="h-full w-full object-cover"
                     />

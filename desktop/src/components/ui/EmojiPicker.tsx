@@ -2,6 +2,7 @@ import * as Popover from "@radix-ui/react-popover";
 import { useMemo, useRef, useState, type ReactNode } from "react";
 import { Clock, Search } from "lucide-react";
 import type { Emoji } from "../../types";
+import { mediaUrl } from "../../lib/instance";
 import { OVERLAY_ANIM } from "../../lib/anim";
 import { ALL_EMOJIS, EMOJI_CATEGORIES } from "../../lib/emojiData";
 
@@ -85,7 +86,7 @@ export function EmojiPicker({
                         onClick={() => onPick(`<${e.animated ? "a" : ""}:${e.name}:${e.id}>`)}
                         className="pressable flex items-center justify-center rounded p-1 transition-transform hover:scale-[1.18] hover:bg-hover"
                       >
-                        <img src={`/api/emojis/${e.id}`} alt={e.name} className="h-6 w-6 object-contain" />
+                        <img src={mediaUrl(`/api/emojis/${e.id}`)} alt={e.name} className="h-6 w-6 object-contain" />
                       </Popover.Close>
                     ))}
                   </Section>
@@ -132,7 +133,7 @@ export function EmojiPicker({
                         onClick={() => onPick(`<${e.animated ? "a" : ""}:${e.name}:${e.id}>`)}
                         className="pressable flex items-center justify-center rounded p-1 transition-transform hover:scale-[1.18] hover:bg-hover"
                       >
-                        <img src={`/api/emojis/${e.id}`} alt={e.name} className="h-6 w-6 object-contain" />
+                        <img src={mediaUrl(`/api/emojis/${e.id}`)} alt={e.name} className="h-6 w-6 object-contain" />
                       </Popover.Close>
                     ))}
                   </Section>

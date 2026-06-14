@@ -24,11 +24,22 @@
 set -euo pipefail
 
 # ── Paramètres ───────────────────────────────────────────────────────────────
-REPO_URL="${REPO_URL:-${1:-}}"
-OZONE_DIR="${OZONE_DIR:-$HOME/ozone}"
+# URL du dépôt (défaut : le dépôt officiel). Surchargeable en 1er argument ou via REPO_URL.
+REPO_URL="${REPO_URL:-${1:-https://github.com/HayatoFox/Ozone.git}}"
 OZONE_BIND="${OZONE_BIND:-0.0.0.0:8080}"
 OZONE_SFU_BIND="${OZONE_SFU_BIND:-0.0.0.0:8081}"
 OZONE_BRANCH="${OZONE_BRANCH:-main}"
+
+# Dossier d'installation. Si on est lancé DEPUIS un clone existant (le script vit dans
+# <clone>/scripts/), on utilise CE clone — pas $HOME/ozone — afin de ne pas re-cloner à côté.
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -z "${OZONE_DIR:-}" ]; then
+  if [ -d "$SCRIPT_ROOT/.git" ]; then
+    OZONE_DIR="$SCRIPT_ROOT"   # lancé depuis un clone → on l'utilise tel quel
+  else
+    OZONE_DIR="$HOME/ozone"    # script isolé → clone dans $HOME/ozone
+  fi
+fi
 
 log()  { printf '\033[1;36m[ozone]\033[0m %s\n' "$*"; }
 warn() { printf '\033[1;33m[ozone] ATTENTION:\033[0m %s\n' "$*" >&2; }

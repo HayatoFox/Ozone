@@ -1,0 +1,27 @@
+# Crate d'empaquetage desktop (Tauri v2) du client Ozone. Workspace AUTONOME (`[workspace]` vide)
+# pour ne PAS être happé par le workspace Rust racine (qui doit rester zéro-`ring` ; Tauri/WebView2
+# n'y appartiennent pas).
+[package]
+name = "ozone-desktop"
+version = "0.1.0"
+description = "Client Ozone (desktop)"
+authors = ["Ozone"]
+edition = "2021"
+
+[workspace]
+
+[lib]
+name = "ozone_desktop_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[features]
+# Empêche l'ouverture d'une console au lancement en release (Windows).
+custom-protocol = ["tauri/custom-protocol"]

@@ -3,6 +3,7 @@ import { ChevronRight, LogOut, Pencil, X } from "lucide-react";
 import { api } from "../api";
 import { roleColorHex, useStore } from "../store";
 import { colorFor, displayName, initials } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 import type { DMChannel, User, UserProfile } from "../types";
 import { CH_GROUP } from "../types";
 import { Avatar } from "./Avatar";
@@ -48,7 +49,7 @@ function UserPanel({ partner }: { partner: User }) {
       {/* Bannière : image téléversée si présente, sinon dégradé doux depuis l'accent. */}
       {profile?.banner_id ? (
         <img
-          src={`/api/users/${partner.id}/banner?v=${profile.banner_id}`}
+          src={mediaUrl(`/api/users/${partner.id}/banner?v=${profile.banner_id}`)}
           alt=""
           className="h-[110px] w-full shrink-0 object-cover"
           draggable={false}
@@ -104,7 +105,7 @@ function UserPanel({ partner }: { partner: User }) {
             <div key={g.id} className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 hover:bg-hover">
               {g.icon_id ? (
                 <img
-                  src={`/api/guilds/${g.id}/icon?v=${g.icon_id}`}
+                  src={mediaUrl(`/api/guilds/${g.id}/icon?v=${g.icon_id}`)}
                   alt=""
                   className="h-8 w-8 rounded-full object-cover"
                 />

@@ -27,6 +27,7 @@ import { api } from "../api";
 import { canIn, permsIn, roleColorHex, useStore } from "../store";
 import { PERM } from "../lib/permissions";
 import { colorFor, displayName, initials, snowflakeMs, timeAgo } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 import { OVERLAY_ANIM, staggerDelay } from "../lib/anim";
 import { GAMES, gameName } from "../lib/games";
 import { CH_TEXT, CH_VOICE, type Invite, type Member, type Role, type Snowflake } from "../types";
@@ -514,9 +515,9 @@ function OverviewPage({ guildId }: { guildId: Snowflake }) {
     setGames((g) => (g.includes(key) ? g.filter((k) => k !== key) : g.length >= 12 ? g : [...g, key]));
   }
 
-  const iconUrl = iconPreview ?? (iconId ? `/api/guilds/${guildId}/icon?v=${guild?.icon_id ?? iconId}` : null);
+  const iconUrl = iconPreview ?? (iconId ? mediaUrl(`/api/guilds/${guildId}/icon?v=${guild?.icon_id ?? iconId}`) : null);
   const bannerUrl =
-    bannerPreview ?? (bannerId ? `/api/guilds/${guildId}/banner?v=${guild?.banner_id ?? bannerId}` : null);
+    bannerPreview ?? (bannerId ? mediaUrl(`/api/guilds/${guildId}/banner?v=${guild?.banner_id ?? bannerId}`) : null);
   const filteredGames = GAMES.filter((g) => g.name.toLowerCase().includes(gameQuery.toLowerCase()));
 
   return (

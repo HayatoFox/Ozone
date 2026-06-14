@@ -1,5 +1,6 @@
 import { useState } from "react";
 import { colorFor, initials } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 import { StatusDot } from "./StatusDot";
 
 interface Props {
@@ -35,7 +36,7 @@ export function Avatar({ name, id, size = 40, status, avatarId, ring = "var(--bg
           // `?v=` : cache-buster lié à l'avatar_id → se rafraîchit en direct au changement.
           // Fondu doux à l'arrivée de l'image (évite le « pop » brut au chargement réseau).
           <img
-            src={`/api/users/${id}/avatar?v=${avatarId}`}
+            src={mediaUrl(`/api/users/${id}/avatar?v=${avatarId}`)}
             alt=""
             className="h-full w-full object-cover opacity-0 transition-opacity duration-300 ease-out"
             draggable={false}

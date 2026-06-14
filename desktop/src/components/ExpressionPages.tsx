@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { Pencil, Play, Trash2, Upload } from "lucide-react";
 import { api } from "../api";
 import { useStore } from "../store";
+import { mediaUrl } from "../lib/instance";
 import { staggerDelay } from "../lib/anim";
 import type { SoundboardSound, Sticker } from "../types";
 import { ImageCropModal } from "./ImageCropModal";
@@ -233,7 +234,7 @@ export function StickersPage({ guildId }: { guildId: string }) {
               <div key={st.id} className="animate-row-in" style={staggerDelay(i)}>
               <div className="group flex flex-col gap-2 rounded-lg bg-sidebar p-3">
                 <img
-                  src={`/api/stickers/${st.id}`}
+                  src={mediaUrl(`/api/stickers/${st.id}`)}
                   alt={st.name}
                   className="aspect-square w-full rounded object-contain"
                   draggable={false}
@@ -331,7 +332,7 @@ export function SoundboardPage({ guildId }: { guildId: string }) {
 
   // Préécoute locale (Audio simple — rien n'est transmis dans le vocal ici).
   function preview(s: SoundboardSound) {
-    const el = new Audio(`/api/soundboard-sounds/${s.id}/audio`);
+    const el = new Audio(mediaUrl(`/api/soundboard-sounds/${s.id}/audio`));
     el.volume = Math.min(Math.max(s.volume, 0), 1);
     void el.play().catch(() => {});
   }

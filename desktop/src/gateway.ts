@@ -3,6 +3,7 @@
 // Cf. crates/ozone-proto/src/gateway.rs et crates/ozone-api/src/gateway.rs.
 
 import type { GatewayFrame } from "./types";
+import { gatewayWsUrl } from "./lib/instance";
 
 const OP = {
   DISPATCH: 0,
@@ -28,10 +29,9 @@ export interface GatewayHooks {
   onAuthLost?: () => void;
 }
 
-// URL WS dérivée de l'origine courante (le proxy Vite relaie /gateway).
+// URL WS de la Gateway : origine courante (web) ou instance configurée (.exe). Cf. lib/instance.
 function gatewayUrl(): string {
-  const proto = location.protocol === "https:" ? "wss:" : "ws:";
-  return `${proto}//${location.host}/gateway`;
+  return gatewayWsUrl();
 }
 
 export class Gateway {

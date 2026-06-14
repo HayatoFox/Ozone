@@ -1,5 +1,6 @@
 import { Fragment, useState, type ReactNode } from "react";
 import { formatHM } from "./format";
+import { mediaUrl } from "./instance";
 
 // Renderer Markdown « façon Discord » — sortie **React** (jamais de HTML brut ⇒ sûr).
 // Couvre le sous-ensemble Discord : gras/italique/souligné/barré, code inline & blocs,
@@ -160,7 +161,7 @@ const RULES: InlineRule[] = [
     render: (m, _c, k) => (
       <img
         key={k}
-        src={`/api/emojis/${m[3]}`}
+        src={mediaUrl(`/api/emojis/${m[3]}`)}
         alt={`:${m[2]}:`}
         title={`:${m[2]}:`}
         loading="lazy"

@@ -13,6 +13,7 @@ import {
   screenVideoConstraints,
   type MediaPrefs,
 } from "./lib/mediaPrefs";
+import { mediaUrl } from "./lib/instance";
 import { PERM, PERM_ALL } from "./lib/permissions";
 import {
   CH_CATEGORY,
@@ -1286,7 +1287,7 @@ export const useStore = create<State>((set, get) => ({
       return;
     }
     try {
-      await voiceConn.playSound(`/api/soundboard-sounds/${sound.id}/audio`, sound.volume);
+      await voiceConn.playSound(mediaUrl(`/api/soundboard-sounds/${sound.id}/audio`), sound.volume);
     } catch (e) {
       set({ error: errMsg(e) });
     }

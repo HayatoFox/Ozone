@@ -12,6 +12,7 @@ import {
 import { CH_GROUP, MSG_MEMBER_JOIN, type Attachment, type Message, type Snowflake } from "../types";
 import { Avatar } from "./Avatar";
 import { colorFor, displayName, formatDayTime, formatHM, initials } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 import { renderMarkdown, type MentionCtx } from "../lib/markdown";
 import { EmojiPicker } from "./ui/EmojiPicker";
 import { MessageContextMenu } from "./ui/MessageContextMenu";
@@ -531,7 +532,7 @@ function Body(p: RowProps) {
 
       {message.sticker && (
         <img
-          src={`/api/stickers/${message.sticker.id}`}
+          src={mediaUrl(`/api/stickers/${message.sticker.id}`)}
           alt={message.sticker.name}
           title={message.sticker.name}
           className="mt-1 h-40 w-40 rounded-lg object-contain opacity-0 transition-opacity duration-300 ease-out"
@@ -608,13 +609,13 @@ function MediaEmbeds({ content }: { content: string }) {
 function ReactionEmoji({ emoji }: { emoji: string }) {
   const m = /^<a?:\w+:(\d+)>$/.exec(emoji);
   if (m) {
-    return <img src={`/api/emojis/${m[1]}`} alt="" className="inline-block h-4 w-4 object-contain" />;
+    return <img src={mediaUrl(`/api/emojis/${m[1]}`)} alt="" className="inline-block h-4 w-4 object-contain" />;
   }
   return <span>{emoji}</span>;
 }
 
 function AttachmentView({ att, onImage }: { att: Attachment; onImage: (url: string) => void }) {
-  const url = `/api${att.url}`;
+  const url = mediaUrl(`/api${att.url}`);
   // Convention spoiler : nom de fichier préfixé « SPOILER_ » → flou jusqu'au clic.
   const isSpoiler = att.filename.startsWith("SPOILER_");
   const [revealed, setRevealed] = useState(!isSpoiler);

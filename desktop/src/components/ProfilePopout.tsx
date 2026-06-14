@@ -19,6 +19,7 @@ import { OVERLAY_ANIM } from "../lib/anim";
 import { CH_VOICE, type ModerateVoiceState, type UserProfile } from "../types";
 import { Avatar } from "./Avatar";
 import { colorFor, initials } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 
 // Carte de profil affichée au clic sur un avatar / pseudo.
 // `open`/`onOpenChange` permettent un contrôle externe (ex. coexistence avec un menu contextuel
@@ -244,7 +245,7 @@ export function UserPopover({
           {/* Bannière : image téléversée si présente, sinon dégradé doux (jamais un aplat brut). */}
           {profile?.banner_id ? (
             <img
-              src={`/api/users/${userId}/banner?v=${profile.banner_id}`}
+              src={mediaUrl(`/api/users/${userId}/banner?v=${profile.banner_id}`)}
               alt=""
               className="h-[72px] w-full object-cover"
               draggable={false}
@@ -260,7 +261,7 @@ export function UserPopover({
               >
                 {profile?.avatar_id ? (
                   <img
-                    src={`/api/users/${userId}/avatar?v=${profile.avatar_id}`}
+                    src={mediaUrl(`/api/users/${userId}/avatar?v=${profile.avatar_id}`)}
                     alt=""
                     className="h-full w-full object-cover"
                     draggable={false}

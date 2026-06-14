@@ -43,6 +43,7 @@ import {
 import { PERM } from "../lib/permissions";
 import { CH_CATEGORY, CH_VOICE, type Channel, type DMChannel, type Member, type VoiceState } from "../types";
 import { displayName } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 import { OVERLAY_ANIM } from "../lib/anim";
 import { Avatar } from "./Avatar";
 import { UserPanel } from "./UserPanel";
@@ -192,7 +193,7 @@ function GuildChannels({ guildId }: { guildId: string }) {
   });
 
   // Bannière du serveur : image téléversée prioritaire, sinon dégradé de couleur vers le bas.
-  const bannerImg = guild?.banner_id ? `/api/guilds/${guildId}/banner?v=${guild.banner_id}` : null;
+  const bannerImg = guild?.banner_id ? mediaUrl(`/api/guilds/${guildId}/banner?v=${guild.banner_id}`) : null;
   const hasBanner = !!(guild?.banner_id || guild?.banner_color != null);
   const bannerStyle: React.CSSProperties = bannerImg
     ? { backgroundImage: `url(${bannerImg})`, backgroundSize: "cover", backgroundPosition: "center" }

@@ -1,6 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useStore } from "./store";
 import { CH_VOICE } from "./types";
+import { needsInstanceUrl } from "./lib/instance";
+import { InstanceGate } from "./components/InstanceGate";
 import { AuthScreen } from "./components/AuthScreen";
 import { ServerRail } from "./components/ServerRail";
 import { ChannelSidebar } from "./components/ChannelSidebar";
@@ -18,9 +20,16 @@ export function App() {
   const instance = useStore((s) => s.instance);
   const boot = useStore((s) => s.boot);
 
+  // Build empaqueté (.exe) sans instance configurée : on demande l'URL AVANT tout boot (le boot
+  // appelle l'API, qui n'a pas d'origine ici). En mode navigateur, needsInstanceUrl() est toujours
+  // faux → comportement inchangé. État local figé au montage (un reload suit la saisie).
+  const [gate] = useState(() => needsInstanceUrl());
+
   useEffect(() => {
-    void boot();
-  }, [boot]);
+    if (!gate) void boot();
+  }, [boot, gate]);
+
+  if (gate) return <InstanceGate />;
 
   // Application native : le menu contextuel du NAVIGATEUR ne doit jamais apparaître.
   // Les menus Radix (salons, messages, serveurs…) s'ouvrent au niveau de leur déclencheur

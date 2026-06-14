@@ -20,6 +20,7 @@ import { api } from "../api";
 import { canIn, roleColorHex, useStore } from "../store";
 import { PERM } from "../lib/permissions";
 import { displayName } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 import { MessageList } from "./MessageList";
 import { InboxButton, PinsButton, SearchButton } from "./HeaderActions";
 import { AddToGroupModal } from "./AddToGroupModal";
@@ -434,7 +435,7 @@ export function Composer({
           {pending.map((a) => (
             <div key={a.id} className="group/att relative animate-pop-in">
               {a.content_type.startsWith("image/") ? (
-                <AuthedImage src={`/api${a.url}`} alt={a.filename} className="h-20 w-20 rounded object-cover ring-1 ring-line" />
+                <AuthedImage src={mediaUrl(`/api${a.url}`)} alt={a.filename} className="h-20 w-20 rounded object-cover ring-1 ring-line" />
               ) : (
                 <div className="flex h-20 w-32 items-center justify-center rounded bg-sidebar p-2 text-center text-xs text-muted ring-1 ring-line">
                   {a.filename}
@@ -461,7 +462,7 @@ export function Composer({
               onClick={() => insertEmoji(e)}
               className="flex w-full items-center gap-2 px-3 py-1.5 text-left transition-colors hover:bg-hover"
             >
-              <img src={`/api/emojis/${e.id}`} alt="" className="h-5 w-5 object-contain" />
+              <img src={mediaUrl(`/api/emojis/${e.id}`)} alt="" className="h-5 w-5 object-contain" />
               <span className="text-sm text-normal">:{e.name}:</span>
             </button>
           ))}

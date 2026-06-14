@@ -4,6 +4,7 @@ import { api, ApiError } from "../api";
 import { roleColorHex, useStore, type MessageDisplay, type Theme } from "../store";
 import type { UserProfile } from "../types";
 import { colorFor, displayName, initials } from "../lib/format";
+import { mediaUrl } from "../lib/instance";
 import { Modal } from "./ServerRail";
 import { ImageCropModal } from "./ImageCropModal";
 import { VoiceVideoSection } from "./VoiceVideoSettings";
@@ -525,9 +526,9 @@ function ProfileSection() {
   }
 
   const avatarUrl =
-    avatarPreview ?? (avatarId && me ? `/api/users/${me.id}/avatar?v=${avatarId}` : null);
+    avatarPreview ?? (avatarId && me ? mediaUrl(`/api/users/${me.id}/avatar?v=${avatarId}`) : null);
   const bannerUrl =
-    bannerPreview ?? (bannerId && me ? `/api/users/${me.id}/banner?v=${bannerId}` : null);
+    bannerPreview ?? (bannerId && me ? mediaUrl(`/api/users/${me.id}/banner?v=${bannerId}`) : null);
 
   const shownName = name.trim() || displayName(me);
   const accentHex = roleColorHex(accent);

@@ -2,6 +2,7 @@ import * as Popover from "@radix-ui/react-popover";
 import type { ReactNode } from "react";
 import { Sticker as StickerIcon } from "lucide-react";
 import type { Sticker } from "../../types";
+import { mediaUrl } from "../../lib/instance";
 import { OVERLAY_ANIM } from "../../lib/anim";
 
 // Sélecteur d'autocollants de la guilde : un clic = envoi immédiat (comportement Discord).
@@ -40,7 +41,7 @@ export function StickerPicker({
                   className="pressable flex aspect-square items-center justify-center rounded-lg p-1 transition-transform hover:scale-105 hover:bg-hover"
                 >
                   <img
-                    src={`/api/stickers/${st.id}`}
+                    src={mediaUrl(`/api/stickers/${st.id}`)}
                     alt={st.name}
                     className="h-full w-full object-contain"
                     draggable={false}

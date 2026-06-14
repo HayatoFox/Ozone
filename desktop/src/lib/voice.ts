@@ -19,6 +19,7 @@ const VIDEO_BITRATE = 2_500_000;
 // Contraintes micro/caméra : construites à CHAQUE acquisition depuis les préférences
 // utilisateur (périphérique choisi + traitement du son) — cf. lib/mediaPrefs.ts.
 import { applySink, audioConstraints, videoConstraints } from "./mediaPrefs";
+import { httpBase, sfuWsBase } from "./instance";
 
 // Règle l'encodeur Opus dans le SDP (offre/réponse) : FEC en bande, DTX, mono, débit cible.
 export function tuneOpus(sdp: string): string {
@@ -314,7 +315,7 @@ export class VoiceConnection {
     const offerSdp = await this.createMungedOffer();
     this.tuneSenders();
 
-    const resp = await fetch(`/sfu/rooms/${channelId}/peers`, {
+    const resp = await fetch(`${httpBase()}/sfu/rooms/${channelId}/peers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sdp: offerSdp, token, tracks: this.manifest }),
@@ -382,14 +383,8 @@ export class VoiceConnection {
   // ───────────────────────────── Signalisation / renégociation ─────────────────────────────
 
   private openSignaling(): void {
-    const proto = location.protocol === "https:" ? "wss" : "ws";
-    // En dev (port Vite 1420), le proxy ws de Vite n'aboutit pas vers la cible http:// du SFU :
-    // on ouvre donc le WebSocket de signalisation **directement** sur le SFU (8081). En prod,
-    // même origine (le reverse-proxy de prod relaie /sfu en HTTP comme en WS).
-    const base =
-      import.meta.env.DEV && location.port === "1420"
-        ? `${proto}://${location.hostname}:8081`
-        : `${proto}://${location.host}`;
+    // Base WS du SFU : origine (web), :8081 direct (dev Vite), ou instance configurée (.exe).
+    const base = sfuWsBase();
     const url = `${base}/sfu/rooms/${this.channelId}/peers/${this.peerId}/signal?token=${encodeURIComponent(this.token)}`;
     let ws: WebSocket;
     try {
@@ -722,7 +717,7 @@ export class VoiceConnection {
     if (this.peerId) {
       try {
         await fetch(
-          `/sfu/rooms/${this.channelId}/peers/${this.peerId}?token=${encodeURIComponent(this.token)}`,
+          `${httpBase()}/sfu/rooms/${this.channelId}/peers/${this.peerId}?token=${encodeURIComponent(this.token)}`,
           { method: "DELETE" },
         );
       } catch {
