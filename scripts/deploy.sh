@@ -29,9 +29,20 @@
 # ─────────────────────────────────────────────────────────────────────────────
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-${1:-}}"
-OZONE_DIR="${OZONE_DIR:-/opt/ozone}"
+# URL du dépôt (défaut : dépôt officiel). Surchargeable en 1er argument ou via REPO_URL.
+REPO_URL="${REPO_URL:-${1:-https://github.com/HayatoFox/Ozone.git}}"
 OZONE_BRANCH="${OZONE_BRANCH:-main}"
+
+# Dossier du projet. Si on est lancé DEPUIS un clone (le script vit dans <clone>/scripts/), on
+# utilise CE clone au lieu de /opt/ozone → pas de re-clone ni de demande d'URL inutile.
+SCRIPT_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [ -z "${OZONE_DIR:-}" ]; then
+  if [ -d "$SCRIPT_ROOT/.git" ]; then
+    OZONE_DIR="$SCRIPT_ROOT"
+  else
+    OZONE_DIR="/opt/ozone"
+  fi
+fi
 OZONE_DATA_DIR="${OZONE_DATA_DIR:-/var/lib/ozone}"
 OZONE_ETC_DIR="${OZONE_ETC_DIR:-/etc/ozone}"
 OZONE_BIND="${OZONE_BIND:-127.0.0.1:8080}"
