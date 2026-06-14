@@ -875,7 +875,9 @@ export const useStore = create<State>((set, get) => ({
   },
 
   selectHome: async () => {
-    set({ view: { kind: "home" } });
+    // `activeDM: null` ⇒ on revient au MENU Amis (et pas à un MP resté ouvert) : sans ça, cliquer
+    // « Amis » depuis une conversation gardait le MP affiché (view=home mais activeDM non nul).
+    set({ view: { kind: "home" }, activeDM: null });
     await get().refreshDMs();
   },
 
@@ -1048,7 +1050,24 @@ export const useStore = create<State>((set, get) => ({
       }
     }
     get().localScreen?.getTracks().forEach((t) => t.stop());
-    set({ myVoice: null, localVideo: null, localScreen: null, voiceVideos: [], speaking: {} });
+    // Retire MON entrée de la liste du salon localement : ne pas attendre le VOICE_STATE_UPDATE
+    // serveur (je viens de quitter → je ne suis peut-être plus destinataire de l'event), sinon mon
+    // avatar/nom resterait affiché en fantôme dans la liste vocale.
+    const myId = get().me?.id;
+    set((s) => {
+      const patch: Partial<State> = {
+        myVoice: null,
+        localVideo: null,
+        localScreen: null,
+        voiceVideos: [],
+        speaking: {},
+      };
+      if (myId && mv) {
+        const list = (s.voiceStatesByGuild[mv.guildId] ?? []).filter((x) => x.user_id !== myId);
+        patch.voiceStatesByGuild = { ...s.voiceStatesByGuild, [mv.guildId]: list };
+      }
+      return patch;
+    });
   },
 
   toggleSelfMute: async () => {

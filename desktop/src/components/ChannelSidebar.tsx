@@ -88,58 +88,101 @@ function VoiceBar() {
   const toggleDeaf = useStore((s) => s.toggleSelfDeaf);
   const toggleVideo = useStore((s) => s.toggleSelfVideo);
   if (!myVoice) return null;
+  const muted = myVoice.selfMute || myVoice.serverMute;
+  const deaf = myVoice.selfDeaf || myVoice.serverDeaf;
   return (
-    // Puce flottante au-dessus du panneau utilisateur (cohérent avec lui).
-    <div className="mx-2 mt-2 flex animate-accordion items-center gap-1 rounded-xl bg-hover px-2 py-1.5 ring-1 ring-line surface-card">
-      <div className="min-w-0 flex-1">
-        <div className="flex items-center gap-1 text-sm font-medium text-online">
-          {connecting ? <Spinner size={14} /> : <Volume2 size={16} />}{" "}
+    // Barre vocale compacte au-dessus du panneau utilisateur (façon Discord) : statut sur une
+    // ligne dense, puis une rangée d'actions fine. On évite la hauteur excessive.
+    <div className="mx-2 mt-2 animate-accordion rounded-lg bg-deepest/60 px-2.5 py-1.5 ring-1 ring-line">
+      {/* Statut : icône + « Vocal connecté » + salon, le tout sur UNE ligne. */}
+      <div className="flex items-center gap-1.5">
+        {connecting ? (
+          <Spinner size={13} />
+        ) : (
+          <Volume2 size={15} className="shrink-0 text-online" />
+        )}
+        <span className="shrink-0 text-[13px] font-semibold text-online">
           {connecting ? "Connexion…" : "Vocal connecté"}
-        </div>
-        <div className="truncate text-xs text-muted">{channelName ?? "Salon vocal"}</div>
+        </span>
+        <span className="ml-1 min-w-0 flex-1 truncate text-[11px] text-muted">
+          {channelName ?? "Salon vocal"}
+        </span>
       </div>
-      <button
-        onClick={() => void toggleMute()}
-        title={
-          myVoice.serverMute
-            ? "Rendu muet par le serveur"
-            : myVoice.selfMute
-              ? "Réactiver le micro"
-              : "Couper le micro"
-        }
-        className={`pressable rounded p-1.5 transition-colors hover:bg-white/5 ${myVoice.selfMute || myVoice.serverMute ? "text-dnd" : "text-interactive-normal"}`}
-      >
-        {myVoice.selfMute || myVoice.serverMute ? <MicOff size={18} /> : <Mic size={18} />}
-      </button>
-      <button
-        onClick={() => void toggleDeaf()}
-        title={
-          myVoice.serverDeaf
-            ? "Mis en sourdine par le serveur"
-            : myVoice.selfDeaf
-              ? "Réactiver le son"
-              : "Se rendre sourd"
-        }
-        className={`pressable rounded p-1.5 transition-colors hover:bg-white/5 ${myVoice.selfDeaf || myVoice.serverDeaf ? "text-dnd" : "text-interactive-normal"}`}
-      >
-        {myVoice.selfDeaf || myVoice.serverDeaf ? <HeadphoneOff size={18} /> : <Headphones size={18} />}
-      </button>
-      <button
-        onClick={() => void toggleVideo()}
-        disabled={connecting}
-        title={myVoice.selfVideo ? "Couper la caméra" : "Activer la caméra"}
-        className={`pressable rounded p-1.5 transition-colors hover:bg-white/5 disabled:opacity-40 ${myVoice.selfVideo ? "text-online" : "text-interactive-normal"}`}
-      >
-        {myVoice.selfVideo ? <Video size={18} /> : <VideoOff size={18} />}
-      </button>
-      <button
-        onClick={() => void leave()}
-        title="Se déconnecter"
-        className="pressable rounded p-1.5 text-interactive-normal transition-colors hover:bg-white/5 hover:text-dnd"
-      >
-        <PhoneOff size={18} />
-      </button>
+      {/* Actions : rangée fine, boutons serrés. Raccrocher légèrement détaché à droite. */}
+      <div className="mt-1 flex items-center gap-0.5">
+        <VoiceBtn
+          onClick={() => void toggleMute()}
+          active={muted}
+          title={
+            myVoice.serverMute
+              ? "Rendu muet par le serveur"
+              : myVoice.selfMute
+                ? "Réactiver le micro"
+                : "Couper le micro"
+          }
+        >
+          {muted ? <MicOff size={16} /> : <Mic size={16} />}
+        </VoiceBtn>
+        <VoiceBtn
+          onClick={() => void toggleDeaf()}
+          active={deaf}
+          title={
+            myVoice.serverDeaf
+              ? "Mis en sourdine par le serveur"
+              : myVoice.selfDeaf
+                ? "Réactiver le son"
+                : "Se rendre sourd"
+          }
+        >
+          {deaf ? <HeadphoneOff size={16} /> : <Headphones size={16} />}
+        </VoiceBtn>
+        <VoiceBtn
+          onClick={() => void toggleVideo()}
+          disabled={connecting}
+          on={myVoice.selfVideo}
+          title={myVoice.selfVideo ? "Couper la caméra" : "Activer la caméra"}
+        >
+          {myVoice.selfVideo ? <Video size={16} /> : <VideoOff size={16} />}
+        </VoiceBtn>
+        <button
+          onClick={() => void leave()}
+          title="Se déconnecter"
+          className="pressable ml-auto rounded-md p-1.5 text-interactive-normal transition-colors hover:bg-dnd/20 hover:text-dnd"
+        >
+          <PhoneOff size={16} />
+        </button>
+      </div>
     </div>
+  );
+}
+
+// Bouton d'action compact de la barre vocale. `active` (rouge) = mute/sourdine ; `on` (vert) = cam.
+function VoiceBtn({
+  children,
+  onClick,
+  title,
+  active,
+  on,
+  disabled,
+}: {
+  children: React.ReactNode;
+  onClick: () => void;
+  title: string;
+  active?: boolean;
+  on?: boolean;
+  disabled?: boolean;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      disabled={disabled}
+      title={title}
+      className={`pressable flex flex-1 items-center justify-center rounded-md py-1.5 transition-colors hover:bg-white/5 disabled:opacity-40 ${
+        active ? "text-dnd" : on ? "text-online" : "text-interactive-normal"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 

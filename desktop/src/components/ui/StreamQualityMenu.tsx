@@ -1,9 +1,9 @@
 import * as Popover from "@radix-ui/react-popover";
 import type { ReactNode } from "react";
-import { Check, Gamepad2, MonitorPlay, MonitorUp, Settings2 } from "lucide-react";
+import { Check, Gamepad2, MonitorPlay, MonitorUp, ScreenShare, Settings2, X } from "lucide-react";
 import { useStore } from "../../store";
 import { OVERLAY_ANIM } from "../../lib/anim";
-import type { StreamFps, StreamHeight } from "../../lib/mediaPrefs";
+import type { StreamFps, StreamHeight, StreamPreset } from "../../lib/mediaPrefs";
 
 // Libellé d'une hauteur cible : 0 ⇒ « Source » (résolution native), sinon « <h>p ».
 export function heightLabel(h: StreamHeight): string {
@@ -13,10 +13,11 @@ export function heightLabel(h: StreamHeight): string {
 const RESOLUTIONS: StreamHeight[] = [720, 1080, 1440, 0];
 const FRAMERATES: StreamFps[] = [15, 30, 60];
 
-// Préréglages façon Discord (« Mode de streaming »). Un préréglage est « sélectionné »
-// quand la hauteur ET le débit d'images courants correspondent ; sinon « Personnalisés ».
+// Préréglages façon Discord (« Mode de streaming »). Le préréglage actif est mémorisé
+// explicitement (mediaPrefs.streamPreset) → « Personnalisés » reste sélectionnable même quand
+// height/fps coïncident avec un préréglage.
 type Preset = {
-  id: "gaming" | "screen" | "custom";
+  id: StreamPreset;
   label: string;
   hint: string;
   icon: ReactNode;
@@ -29,13 +30,16 @@ const PRESETS: Preset[] = [
   { id: "custom", label: "Personnalisés", hint: "Réglages manuels", icon: <Settings2 size={16} /> },
 ];
 
-// Popover de qualité du partage d'écran (résolution / FPS / audio). Le déclencheur est fourni
-// par l'appelant via `children` (façon UserPopover / ChannelContextMenu).
+// Modale de partage d'écran (façon Discord) : choix du mode/qualité PUIS lancement. Le déclencheur
+// est fourni par l'appelant via `children`. Tant qu'aucun partage n'est en cours, un bouton
+// « Partager l'écran » lance la capture (le sélecteur de source natif s'ouvre alors) ; pendant un
+// partage, on peut changer la source ou arrêter, et tout ajustement qualité s'applique à chaud.
 export function StreamQualityMenu({ children }: { children: ReactNode }) {
   const mediaPrefs = useStore((s) => s.mediaPrefs);
   const setMediaPrefs = useStore((s) => s.setMediaPrefs);
   const localScreen = useStore((s) => s.localScreen);
   const restream = useStore((s) => s.restreamWithCurrentQuality);
+  const toggleScreen = useStore((s) => s.toggleScreenShare);
 
   // Applique un changement de préférence puis, si un partage est en cours, l'applique à chaud.
   function apply(patch: Partial<typeof mediaPrefs>) {
@@ -43,8 +47,16 @@ export function StreamQualityMenu({ children }: { children: ReactNode }) {
     if (localScreen) void restream();
   }
 
-  const activePreset: Preset["id"] =
-    PRESETS.find((p) => p.height !== undefined && p.height === mediaPrefs.streamHeight && p.fps === mediaPrefs.streamFps)?.id ?? "custom";
+  // Sélectionne un préréglage : pose le mode ET ses valeurs (gaming/screen), ou bascule en custom.
+  function pickPreset(p: Preset) {
+    if (p.id === "custom") {
+      apply({ streamPreset: "custom" });
+    } else {
+      apply({ streamPreset: p.id, streamHeight: p.height!, streamFps: p.fps! });
+    }
+  }
+
+  const activePreset = mediaPrefs.streamPreset;
 
   return (
     <Popover.Root>
@@ -60,14 +72,12 @@ export function StreamQualityMenu({ children }: { children: ReactNode }) {
             Mode de streaming
           </div>
 
-          {/* Préréglages — sélection radio. */}
+          {/* Préréglages — sélection radio (mémorisée explicitement). */}
           {PRESETS.map((p) => (
             <button
               key={p.id}
               type="button"
-              onClick={() => {
-                if (p.height !== undefined && p.fps !== undefined) apply({ streamHeight: p.height, streamFps: p.fps });
-              }}
+              onClick={() => pickPreset(p)}
               className={`pressable flex w-full items-center gap-2.5 rounded px-2 py-1.5 text-left transition-colors ${
                 activePreset === p.id ? "bg-white/10 text-header" : "text-normal hover:bg-white/5"
               }`}
@@ -135,7 +145,7 @@ export function StreamQualityMenu({ children }: { children: ReactNode }) {
             <span className="flex-1 truncate">Couper l'audio du stream</span>
           </button>
 
-          {/* Changer de source : uniquement pertinent pendant un partage en cours. */}
+          {/* Pendant un partage : changer de source. */}
           {localScreen && (
             <button
               type="button"
@@ -147,6 +157,34 @@ export function StreamQualityMenu({ children }: { children: ReactNode }) {
               </span>
               <span className="flex-1 truncate">Changer de source</span>
             </button>
+          )}
+
+          <div className="my-1 h-px bg-white/10" />
+
+          {/* Action principale : lancer le partage (sélecteur de source natif) ou l'arrêter.
+              C'est ce bouton — et non un démarrage automatique — qui déclenche getDisplayMedia. */}
+          {localScreen ? (
+            <Popover.Close asChild>
+              <button
+                type="button"
+                onClick={() => void toggleScreen()}
+                className="pressable mt-0.5 flex w-full items-center justify-center gap-2 rounded-lg bg-dnd py-2 text-sm font-semibold text-white transition-opacity hover:opacity-90"
+              >
+                <X size={16} />
+                Arrêter le partage
+              </button>
+            </Popover.Close>
+          ) : (
+            <Popover.Close asChild>
+              <button
+                type="button"
+                onClick={() => void toggleScreen()}
+                className="pressable mt-0.5 flex w-full items-center justify-center gap-2 rounded-lg btn-success py-2 text-sm font-semibold text-white"
+              >
+                <ScreenShare size={16} />
+                Partager l'écran
+              </button>
+            </Popover.Close>
           )}
 
           <Popover.Arrow className="fill-floating" />

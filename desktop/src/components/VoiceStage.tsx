@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import * as Popover from "@radix-ui/react-popover";
 import {
-  ChevronDown,
   HeadphoneOff,
   Headphones,
   Maximize,
@@ -189,7 +188,6 @@ export function VoiceStage({ channel, guildId }: { channel: Channel; guildId: st
   const toggleMute = useStore((s) => s.toggleSelfMute);
   const toggleDeaf = useStore((s) => s.toggleSelfDeaf);
   const toggleVideo = useStore((s) => s.toggleSelfVideo);
-  const toggleScreen = useStore((s) => s.toggleScreenShare);
   const reconnect = useStore((s) => s.reconnectVoice);
   const voiceTextOpen = useStore((s) => s.voiceTextOpen);
   const toggleVoiceText = useStore((s) => s.toggleVoiceText);
@@ -440,21 +438,18 @@ export function VoiceStage({ channel, guildId }: { channel: Channel; guildId: st
         >
           {myVoice?.selfVideo ? <Video size={20} /> : <VideoOff size={20} />}
         </CtrlButton>
-        <CtrlButton
-          active={!!localScreen}
-          title={localScreen ? "Arrêter le partage d'écran" : "Partager un écran"}
-          onClick={() => void toggleScreen()}
-          disabled={connecting}
-        >
-          <MonitorUp size={20} />
-        </CtrlButton>
+        {/* Le bouton OUVRE la modale de partage (choix qualité/source + bouton « Partager ») :
+            on ne lance jamais getDisplayMedia directement. */}
         <StreamQualityMenu>
           <button
             type="button"
-            title="Qualité du partage d'écran"
-            className="pressable flex h-7 w-7 items-center justify-center rounded-full bg-white/5 text-interactive-normal transition-colors hover:bg-white/10"
+            title={localScreen ? "Partage d'écran (en cours)" : "Partager un écran"}
+            disabled={connecting}
+            className={`pressable flex h-12 w-12 items-center justify-center rounded-full transition-colors disabled:opacity-40 ${
+              localScreen ? "bg-online text-white" : "bg-white/5 text-interactive-normal hover:bg-white/10"
+            }`}
           >
-            <ChevronDown size={16} />
+            <MonitorUp size={20} />
           </button>
         </StreamQualityMenu>
         <SoundboardButton guildId={guildId} disabled={connecting} />

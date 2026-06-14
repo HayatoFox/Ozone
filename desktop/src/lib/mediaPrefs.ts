@@ -30,11 +30,16 @@ export interface MediaPrefs {
   streamHeight: StreamHeight;
   streamFps: StreamFps;
   streamAudio: boolean;
+  // Préréglage choisi explicitement (les valeurs ci-dessus en découlent pour gaming/screen ;
+  // en mode « custom » l'utilisateur règle height/fps à la main). Stocké à part pour que
+  // « Personnalisés » reste sélectionnable même quand height/fps coïncident avec un préréglage.
+  streamPreset: StreamPreset;
 }
 
 // Hauteur cible du partage d'écran. 0 ⇒ « Source » (résolution native, sans contrainte).
 export type StreamHeight = 0 | 720 | 1080 | 1440;
 export type StreamFps = 15 | 30 | 60;
+export type StreamPreset = "gaming" | "screen" | "custom";
 
 export const DEFAULT_MEDIA_PREFS: MediaPrefs = {
   micId: null,
@@ -52,6 +57,7 @@ export const DEFAULT_MEDIA_PREFS: MediaPrefs = {
   streamHeight: 1080,
   streamFps: 30,
   streamAudio: true,
+  streamPreset: "custom",
 };
 
 /** Vrai si un évènement clavier correspond exactement au combo (mêmes modificateurs + code). */
