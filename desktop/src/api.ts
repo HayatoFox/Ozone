@@ -1,7 +1,7 @@
 // Client REST typé pour le serveur Ozone (ozone-api).
 // Base `/api` (origine, proxy Vite en dev) ou `<instance>/api` (build empaqueté). Auth Bearer.
 
-import { apiBase } from "./lib/instance";
+import { apiBase, appFetch } from "./lib/instance";
 import type {
   AddRelationship,
   Attachment,
@@ -207,7 +207,7 @@ async function request<T>(path: string, opts: ReqOpts = {}): Promise<T> {
   if (body !== undefined) headers["Content-Type"] = "application/json";
   if (auth && accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
 
-  const res = await fetch(url, {
+  const res = await appFetch(url, {
     method,
     headers,
     body: body !== undefined ? JSON.stringify(body) : undefined,
@@ -256,7 +256,7 @@ const del = <T>(p: string, body?: unknown) => request<T>(p, { method: "DELETE", 
 async function requestForm<T>(path: string, form: FormData, retried = false): Promise<T> {
   const headers: Record<string, string> = {};
   if (accessToken) headers["Authorization"] = `Bearer ${accessToken}`;
-  const res = await fetch(BASE() + path, { method: "POST", headers, body: form });
+  const res = await appFetch(BASE() + path, { method: "POST", headers, body: form });
   if (res.status === 401 && !retried) {
     if (await refreshTokens()) return requestForm<T>(path, form, true);
   }

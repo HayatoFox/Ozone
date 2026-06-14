@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { ImageOff } from "lucide-react";
 import { getAccessToken } from "../api";
+import { appFetch } from "../lib/instance";
 
 // Récupère une ressource protégée (bearer) en blob et expose une URL d'objet locale.
 // Nécessaire car les requêtes <img>/<a> du navigateur ne portent pas l'en-tête Authorization.
@@ -15,7 +16,7 @@ function useAuthedBlob(src: string): { url: string | null; failed: boolean } {
     (async () => {
       try {
         const token = getAccessToken();
-        const res = await fetch(src, {
+        const res = await appFetch(src, {
           headers: token ? { Authorization: `Bearer ${token}` } : {},
         });
         if (!res.ok) {
@@ -70,7 +71,7 @@ export function AuthedImage({
 // Télécharge une ressource protégée (bearer) puis déclenche l'enregistrement local.
 export async function authedDownload(src: string, filename: string): Promise<void> {
   const token = getAccessToken();
-  const res = await fetch(src, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
+  const res = await appFetch(src, { headers: token ? { Authorization: `Bearer ${token}` } : {} });
   if (!res.ok) return;
   const blob = await res.blob();
   const url = URL.createObjectURL(blob);

@@ -107,7 +107,7 @@ function MemberRow({
   // Statut personnalisé : affiché sous le nom (mis à jour en direct via PRESENCE_UPDATE).
   const customStatus = useStore((s) => s.customStatus[id]);
   return (
-    <UserPopover userId={id} side="left" guildId={guildId}>
+    <UserPopover userId={id} side="left" guildId={guildId} triggerClassName="block w-full">
       <div
         className={`flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 transition-colors hover:bg-hover ${
           dim ? "opacity-40" : ""

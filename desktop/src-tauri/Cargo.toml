@@ -18,7 +18,12 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = [] }
+# `devtools` : autorise l'inspecteur (clic droit → Inspecter) même en build release, le temps de
+# diagnostiquer. À retirer pour la distribution finale.
+tauri = { version = "2", features = ["devtools"] }
+# Plugin HTTP natif : les requêtes passent par Rust (reqwest), donc PAS soumises à la politique
+# CORS du WebView (l'origine du front est tauri.localhost ≠ instance). Indispensable côté .exe.
+tauri-plugin-http = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

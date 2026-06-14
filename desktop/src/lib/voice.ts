@@ -19,7 +19,7 @@ const VIDEO_BITRATE = 2_500_000;
 // Contraintes micro/caméra : construites à CHAQUE acquisition depuis les préférences
 // utilisateur (périphérique choisi + traitement du son) — cf. lib/mediaPrefs.ts.
 import { applySink, audioConstraints, videoConstraints } from "./mediaPrefs";
-import { httpBase, sfuWsBase } from "./instance";
+import { appFetch, httpBase, sfuWsBase } from "./instance";
 
 // Règle l'encodeur Opus dans le SDP (offre/réponse) : FEC en bande, DTX, mono, débit cible.
 export function tuneOpus(sdp: string): string {
@@ -315,7 +315,7 @@ export class VoiceConnection {
     const offerSdp = await this.createMungedOffer();
     this.tuneSenders();
 
-    const resp = await fetch(`${httpBase()}/sfu/rooms/${channelId}/peers`, {
+    const resp = await appFetch(`${httpBase()}/sfu/rooms/${channelId}/peers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ sdp: offerSdp, token, tracks: this.manifest }),
@@ -635,7 +635,7 @@ export class VoiceConnection {
     void ctx.resume().catch(() => {});
     let buf = this.soundCache.get(url);
     if (!buf) {
-      const resp = await fetch(url);
+      const resp = await appFetch(url);
       if (!resp.ok) throw new Error(`audio ${resp.status}`);
       buf = await ctx.decodeAudioData(await resp.arrayBuffer());
       this.soundCache.set(url, buf);
@@ -716,7 +716,7 @@ export class VoiceConnection {
     }
     if (this.peerId) {
       try {
-        await fetch(
+        await appFetch(
           `${httpBase()}/sfu/rooms/${this.channelId}/peers/${this.peerId}?token=${encodeURIComponent(this.token)}`,
           { method: "DELETE" },
         );

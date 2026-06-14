@@ -113,3 +113,32 @@ export function sfuWsBase(): string {
   }
   return `${proto}//${location.host}`;
 }
+
+// ───────────────────────────── fetch ─────────────────────────────
+// En mode EMPAQUETÉ, le front (origine `tauri.localhost`) ne peut pas `fetch` une instance distante :
+// le WebView applique la politique CORS et l'API ne renvoie pas d'`Access-Control-Allow-Origin`.
+// On route donc les requêtes via le plugin HTTP NATIF de Tauri (requête Rust, hors navigateur, donc
+// non soumise à CORS). En mode navigateur web, on garde le `fetch` standard (même origine, pas de CORS).
+
+let tauriFetch: typeof fetch | null = null;
+let tauriFetchLoading: Promise<typeof fetch> | null = null;
+
+async function getTauriFetch(): Promise<typeof fetch> {
+  if (tauriFetch) return tauriFetch;
+  if (!tauriFetchLoading) {
+    tauriFetchLoading = import("@tauri-apps/plugin-http").then((m) => {
+      tauriFetch = m.fetch as unknown as typeof fetch;
+      return tauriFetch;
+    });
+  }
+  return tauriFetchLoading;
+}
+
+/** `fetch` adapté au contexte : natif Tauri (sans CORS) en .exe, `window.fetch` en navigateur. */
+export async function appFetch(input: string, init?: RequestInit): Promise<Response> {
+  if (isPackaged()) {
+    const f = await getTauriFetch();
+    return f(input, init);
+  }
+  return fetch(input, init);
+}

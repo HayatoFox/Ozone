@@ -31,6 +31,7 @@ export function UserPopover({
   guildId,
   open,
   onOpenChange: controlledOnOpenChange,
+  triggerClassName,
 }: {
   userId: string;
   children: ReactNode;
@@ -38,6 +39,10 @@ export function UserPopover({
   guildId?: string;
   open?: boolean;
   onOpenChange?: (open: boolean) => void;
+  // Classes additionnelles sur le déclencheur (`Popover.Trigger`). Permet p.ex. de forcer
+  // `block w-full` dans la liste des membres pour qu'un membre occupe TOUJOURS une ligne entière
+  // (le <button> du trigger est inline-block par défaut → sinon les membres se mettent côte à côte).
+  triggerClassName?: string;
 }) {
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [loading, setLoading] = useState(false);
@@ -234,7 +239,9 @@ export function UserPopover({
 
   return (
     <Popover.Root open={open} onOpenChange={(o) => void onOpenChange(o)}>
-      <Popover.Trigger className="text-left outline-none">{children}</Popover.Trigger>
+      <Popover.Trigger className={`text-left outline-none ${triggerClassName ?? ""}`}>
+        {children}
+      </Popover.Trigger>
       <Popover.Portal>
         <Popover.Content
           side={side}

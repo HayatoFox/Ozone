@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { setInstanceUrl } from "../lib/instance";
+import { appFetch, setInstanceUrl } from "../lib/instance";
 import { Spinner } from "./ui/Spinner";
 
 // Écran de saisie de l'URL d'instance — affiché UNIQUEMENT dans le build empaqueté (.exe Tauri),
@@ -21,30 +21,31 @@ export function InstanceGate() {
     setError(null);
     // Détecte le préfixe REST : déploiement standard (front + reverse-proxy → `/api`), ou API nue
     // servie directement (préfixe vide). On teste `/api/instance` puis `/instance` en repli.
-    try {
-      let prefix: string | null = null;
-      for (const p of ["/api", ""]) {
-        try {
-          const res = await fetch(`${base}${p}/instance`, { method: "GET" });
-          if (res.ok) {
-            await res.json().catch(() => ({}));
-            prefix = p;
-            break;
-          }
-        } catch {
-          /* on essaie le préfixe suivant */
+    let prefix: string | null = null;
+    let lastDetail = "";
+    for (const p of ["/api", ""]) {
+      try {
+        const res = await appFetch(`${base}${p}/instance`, { method: "GET" });
+        if (res.ok) {
+          prefix = p;
+          break;
         }
+        lastDetail = `HTTP ${res.status} sur ${p || "/"}/instance`;
+      } catch (e) {
+        // Échec réseau / CSP / TLS : on conserve le détail pour le diagnostic.
+        lastDetail = e instanceof Error ? `${e.name}: ${e.message}` : "échec réseau";
       }
-      if (prefix === null) throw new Error("aucune instance Ozone à cette adresse");
-      setInstanceUrl(base, prefix);
-      location.reload(); // le boot repart en ciblant cette instance
-    } catch (e) {
+    }
+    if (prefix === null) {
       setError(
-        `Impossible de joindre cette instance (${e instanceof Error ? e.message : "erreur"}). ` +
+        `Impossible de joindre cette instance (${lastDetail || "aucune réponse"}). ` +
           "Vérifie l'adresse (ex. https://chat.exemple.fr).",
       );
       setBusy(false);
+      return;
     }
+    setInstanceUrl(base, prefix);
+    location.reload(); // le boot repart en ciblant cette instance
   }
 
   return (
