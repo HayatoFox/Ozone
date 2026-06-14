@@ -61,7 +61,7 @@ async fn token(app: &Router, u: &str, e: &str) -> String {
         app,
         "POST",
         "/auth/register",
-        Some(json!({"username":u,"email":e,"password":"motdepasse"})),
+        Some(json!({"username":u,"email":e,"password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await
@@ -85,7 +85,7 @@ async fn invite_only_registration() {
         &app,
         "POST",
         "/auth/register",
-        Some(json!({"username":"alice","email":"a@ia.fr","password":"motdepasse"})),
+        Some(json!({"username":"alice","email":"a@ia.fr","password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await;
@@ -105,7 +105,7 @@ async fn invite_only_registration() {
         &app,
         "POST",
         "/auth/register",
-        Some(json!({"username":"bob","email":"b@ia.fr","password":"motdepasse"})),
+        Some(json!({"username":"bob","email":"b@ia.fr","password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await;
@@ -133,7 +133,7 @@ async fn invite_only_registration() {
         "POST",
         "/auth/register",
         Some(
-            json!({"username":"bob","email":"b@ia.fr","password":"motdepasse","invite_code":code}),
+            json!({"username":"bob","email":"b@ia.fr","password":"Sup3r-Ozone-Pw","invite_code":code}),
         ),
         None,
     )
@@ -141,7 +141,7 @@ async fn invite_only_registration() {
     assert_eq!(s, StatusCode::OK, "inscription avec invitation acceptée");
 
     // Mauvais code → refusé.
-    let (s, _) = send(&app, "POST", "/auth/register", Some(json!({"username":"carol","email":"c@ia.fr","password":"motdepasse","invite_code":"ZZZZZZZZ"})), None).await;
+    let (s, _) = send(&app, "POST", "/auth/register", Some(json!({"username":"carol","email":"c@ia.fr","password":"Sup3r-Ozone-Pw","invite_code":"ZZZZZZZZ"})), None).await;
     assert_eq!(s, StatusCode::FORBIDDEN, "mauvaise invitation refusée");
 }
 
@@ -156,7 +156,7 @@ async fn suspension_blocks_login() {
         &app,
         "POST",
         "/auth/login",
-        Some(json!({"login":"bob","password":"motdepasse"})),
+        Some(json!({"login":"bob","password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await;
@@ -175,7 +175,7 @@ async fn suspension_blocks_login() {
         &app,
         "POST",
         "/auth/login",
-        Some(json!({"login":"bob","password":"motdepasse"})),
+        Some(json!({"login":"bob","password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await;
@@ -198,7 +198,7 @@ async fn suspension_blocks_login() {
         &app,
         "POST",
         "/auth/login",
-        Some(json!({"login":"bob","password":"motdepasse"})),
+        Some(json!({"login":"bob","password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await;

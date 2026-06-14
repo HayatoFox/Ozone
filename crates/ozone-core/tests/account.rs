@@ -16,7 +16,7 @@ async fn presence_profile_settings_account_flow() {
     let pres = client
         .set_presence(&SetPresence {
             status: "dnd".into(),
-            custom_status: Some("en réunion".into()),
+            custom_status: Some(Some("en réunion".into())),
         })
         .await
         .unwrap();

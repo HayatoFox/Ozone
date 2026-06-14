@@ -3478,6 +3478,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "futures-util",
  "ozone-proto",
  "serde",
  "serde_json",

@@ -76,7 +76,7 @@ async fn register(app: &Router, u: &str, e: &str, p: &str) -> (String, String) {
 #[tokio::test]
 async fn change_password_revokes_sessions() {
     let app = app().await;
-    let (access, refresh) = register(&app, "alice", "a@ac.fr", "motdepasse").await;
+    let (access, refresh) = register(&app, "alice", "a@ac.fr", "Sup3r-Ozone-Pw").await;
 
     // Mauvais mot de passe actuel → refusé.
     let (s, _) = send(
@@ -93,7 +93,7 @@ async fn change_password_revokes_sessions() {
         &app,
         "PATCH",
         "/users/@me/password",
-        Some(json!({"current_password":"motdepasse","new_password":"court"})),
+        Some(json!({"current_password":"Sup3r-Ozone-Pw","new_password":"court"})),
         Some(&access),
     )
     .await;
@@ -104,7 +104,7 @@ async fn change_password_revokes_sessions() {
         &app,
         "PATCH",
         "/users/@me/password",
-        Some(json!({"current_password":"motdepasse","new_password":"nouveaumdp12"})),
+        Some(json!({"current_password":"Sup3r-Ozone-Pw","new_password":"nouveaumdp12"})),
         Some(&access),
     )
     .await;
@@ -139,7 +139,7 @@ async fn change_password_revokes_sessions() {
         &app,
         "POST",
         "/auth/login",
-        Some(json!({"login":"alice","password":"motdepasse"})),
+        Some(json!({"login":"alice","password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await;
@@ -149,15 +149,15 @@ async fn change_password_revokes_sessions() {
 #[tokio::test]
 async fn change_email_flow() {
     let app = app().await;
-    let (access, _r) = register(&app, "alice", "a@ac2.fr", "motdepasse").await;
-    register(&app, "bob", "bob@ac2.fr", "motdepasse").await;
+    let (access, _r) = register(&app, "alice", "a@ac2.fr", "Sup3r-Ozone-Pw").await;
+    register(&app, "bob", "bob@ac2.fr", "Sup3r-Ozone-Pw").await;
 
     // Sans jeton → 401.
     let (s, _) = send(
         &app,
         "PATCH",
         "/users/@me/email",
-        Some(json!({"password":"motdepasse","new_email":"x@y.fr"})),
+        Some(json!({"password":"Sup3r-Ozone-Pw","new_email":"x@y.fr"})),
         None,
     )
     .await;
@@ -177,7 +177,7 @@ async fn change_email_flow() {
         &app,
         "PATCH",
         "/users/@me/email",
-        Some(json!({"password":"motdepasse","new_email":"bob@ac2.fr"})),
+        Some(json!({"password":"Sup3r-Ozone-Pw","new_email":"bob@ac2.fr"})),
         Some(&access),
     )
     .await;
@@ -188,7 +188,7 @@ async fn change_email_flow() {
         &app,
         "PATCH",
         "/users/@me/email",
-        Some(json!({"password":"motdepasse","new_email":"nouvelle@ac2.fr"})),
+        Some(json!({"password":"Sup3r-Ozone-Pw","new_email":"nouvelle@ac2.fr"})),
         Some(&access),
     )
     .await;

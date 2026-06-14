@@ -22,8 +22,18 @@ pub struct AppState {
     /// Secret de signature des **jetons vocaux** (partagé avec le nœud média SFU via
     /// `OZONE_VOICE_SECRET` ; à défaut, le secret JWT de l'instance).
     pub voice_secret: Arc<Vec<u8>>,
+    /// Base HTTP du nœud média SFU (`OZONE_SFU_URL`, déf. `http://127.0.0.1:8081`). Sert à l'API
+    /// pour évincer un pair du média (déconnexion de modération) — sinon le SFU continuerait de
+    /// relayer son flux. HTTP clair (co-localisé / derrière reverse-proxy) : aucune dépendance TLS.
+    pub sfu_url: Arc<String>,
     /// Répertoire de stockage des pièces jointes (`OZONE_UPLOAD_DIR`).
     pub upload_dir: Arc<std::path::PathBuf>,
+    /// Limiteur de débit en mémoire (token bucket par clé) — R1/R6.
+    pub rate: Arc<crate::ratelimit::RateLimiter>,
+    /// Faire confiance à l'en-tête `X-Forwarded-For` (déploiement DERRIÈRE un reverse-proxy
+    /// de confiance, `OZONE_TRUSTED_PROXY=1`). Faux par défaut : sinon un client en accès direct
+    /// pourrait usurper son IP et contourner le rate-limiting par IP. Cf. `extract::ClientIp`.
+    pub trust_proxy: bool,
 }
 
 /// Runtime de l'instance (chargé au bootstrap).

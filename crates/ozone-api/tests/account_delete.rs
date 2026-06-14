@@ -62,7 +62,7 @@ async fn token(app: &Router, u: &str, e: &str) -> String {
         app,
         "POST",
         "/auth/register",
-        Some(json!({"username":u,"email":e,"password":"motdepasse"})),
+        Some(json!({"username":u,"email":e,"password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await
@@ -145,7 +145,7 @@ async fn delete_account_anonymizes_and_keeps_messages() {
         &app,
         "DELETE",
         "/users/@me",
-        Some(json!({"password":"motdepasse"})),
+        Some(json!({"password":"Sup3r-Ozone-Pw"})),
         Some(&alice),
     )
     .await;
@@ -156,7 +156,7 @@ async fn delete_account_anonymizes_and_keeps_messages() {
         &app,
         "POST",
         "/auth/login",
-        Some(json!({"login":"alice","password":"motdepasse"})),
+        Some(json!({"login":"alice","password":"Sup3r-Ozone-Pw"})),
         None,
     )
     .await;
@@ -215,7 +215,7 @@ async fn cannot_delete_while_owning_guild() {
         &app,
         "DELETE",
         "/users/@me",
-        Some(json!({"password":"motdepasse"})),
+        Some(json!({"password":"Sup3r-Ozone-Pw"})),
         Some(&owner),
     )
     .await;

@@ -9,6 +9,7 @@ use crate::state::{AppState, EventScope, HubEvent};
 use crate::util::parse_i64;
 use axum::extract::{Path, Query, State};
 use axum::Json;
+use crate::routes_polls::build_poll;
 use ozone_proto::dto::{
     Attachment, BulkDelete, CreateMessage, EditMessage, Message, Reaction, SearchResponse, User,
 };
@@ -25,8 +26,10 @@ const MSG_SELECT: &str =
     "SELECT m.id, m.channel_id, m.author_id, m.content, m.type AS kind, m.nonce, \
      m.created_at, m.edited_at, m.reference_id, m.pinned, m.webhook_id, \
      m.author_name AS wh_name, m.author_avatar AS wh_avatar, \
+     m.sticker_id, stk.name AS sticker_name, stk.format_type AS sticker_format, m.embeds, \
      u.username, u.display_name, u.avatar_id \
-     FROM messages m JOIN users u ON u.id = m.author_id";
+     FROM messages m JOIN users u ON u.id = m.author_id \
+     LEFT JOIN stickers stk ON stk.id = m.sticker_id";
 
 async fn emit(st: &AppState, channel_id: i64, t: &str, d: serde_json::Value) {
     // Portée pub/sub = ce salon (MP ou salon de guilde), qui existe au moment de l'émission.
@@ -82,6 +85,80 @@ fn row_to_message_basic(r: SqliteRow) -> Message {
         nonce: r.get("nonce"),
         webhook_id,
         attachments: Vec::new(),
+        poll: None,
+        // Le sticker peut avoir été supprimé depuis : le LEFT JOIN renvoie alors des NULL
+        // (on n'affiche que les stickers encore résolus).
+        sticker: r.get::<Option<i64>, _>("sticker_id").and_then(|sid| {
+            let name: Option<String> = r.get("sticker_name");
+            name.map(|name| ozone_proto::dto::MessageSticker {
+                id: Snowflake::from_i64(sid),
+                name,
+                format_type: r.get::<Option<i64>, _>("sticker_format").unwrap_or(1) as u8,
+            })
+        }),
+        embeds: r
+            .get::<Option<String>, _>("embeds")
+            .and_then(|s| serde_json::from_str(&s).ok())
+            .unwrap_or_default(),
+    }
+}
+
+/// Assainit et borne une liste d'embeds, renvoyant un JSON prêt à stocker (ou `None` si vide).
+/// Bornes : ≤ 10 embeds, titre ≤ 256, description ≤ 4096, ≤ 25 champs (name ≤ 256, value ≤ 1024),
+/// footer ≤ 2048 ; URLs forcées en http(s) (sinon retirées) ; couleur masquée à 24 bits.
+pub fn sanitize_embeds(embeds: Vec<ozone_proto::dto::MessageEmbed>) -> Option<String> {
+    fn clip(s: Option<String>, max: usize) -> Option<String> {
+        s.map(|t| t.chars().take(max).collect::<String>())
+            .filter(|t| !t.is_empty())
+    }
+    fn safe_url(u: Option<String>) -> Option<String> {
+        u.filter(|s| s.starts_with("http://") || s.starts_with("https://"))
+            .map(|s| s.chars().take(2048).collect())
+    }
+    if embeds.is_empty() {
+        return None;
+    }
+    let cleaned: Vec<ozone_proto::dto::MessageEmbed> = embeds
+        .into_iter()
+        .take(10)
+        .map(|e| ozone_proto::dto::MessageEmbed {
+            title: clip(e.title, 256),
+            description: clip(e.description, 4096),
+            url: safe_url(e.url),
+            color: e.color.map(|c| c & 0xFF_FFFF),
+            fields: e
+                .fields
+                .into_iter()
+                .take(25)
+                .filter_map(|f| {
+                    let name: String = f.name.chars().take(256).collect();
+                    let value: String = f.value.chars().take(1024).collect();
+                    if name.is_empty() || value.is_empty() {
+                        None
+                    } else {
+                        Some(ozone_proto::dto::EmbedField {
+                            name,
+                            value,
+                            inline: f.inline,
+                        })
+                    }
+                })
+                .collect(),
+            image_url: safe_url(e.image_url),
+            footer: clip(e.footer, 2048),
+        })
+        // Retire les embeds totalement vides.
+        .filter(|e| {
+            e.title.is_some()
+                || e.description.is_some()
+                || !e.fields.is_empty()
+                || e.image_url.is_some()
+        })
+        .collect();
+    if cleaned.is_empty() {
+        None
+    } else {
+        serde_json::to_string(&cleaned).ok()
     }
 }
 
@@ -168,6 +245,21 @@ async fn load_attachments(st: &AppState, ids: &[i64]) -> AppResult<HashMap<i64, 
     Ok(map)
 }
 
+/// Identifiants de messages (dans l'ensemble donné) qui portent un sondage.
+async fn load_poll_ids(st: &AppState, ids: &[i64]) -> AppResult<Vec<i64>> {
+    if ids.is_empty() {
+        return Ok(Vec::new());
+    }
+    let list = ids
+        .iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",");
+    let sql = format!("SELECT message_id FROM polls WHERE message_id IN ({list})");
+    let rows = sqlx::query(&sql).fetch_all(&st.pool).await?;
+    Ok(rows.into_iter().map(|r| r.get::<i64, _>("message_id")).collect())
+}
+
 async fn hydrate(st: &AppState, mut msg: Message, user_id: i64) -> AppResult<Message> {
     let map = load_reactions(st, &[msg.id.as_i64()], user_id).await?;
     if let Some(rs) = map.get(&msg.id.as_i64()) {
@@ -177,12 +269,23 @@ async fn hydrate(st: &AppState, mut msg: Message, user_id: i64) -> AppResult<Mes
     if let Some(a) = amap.get(&msg.id.as_i64()) {
         msg.attachments = a.clone();
     }
+    if !load_poll_ids(st, &[msg.id.as_i64()]).await?.is_empty() {
+        msg.poll = Some(build_poll(st, msg.id.as_i64(), user_id).await?);
+    }
     if let Some(ref_id) = msg.reference_id {
         msg.referenced_message = fetch_referenced(st, msg.channel_id.as_i64(), ref_id.as_i64())
             .await?
             .map(Box::new);
     }
     Ok(msg)
+}
+
+/// Ré-hydrate un message et diffuse un `MESSAGE_UPDATE` (utilisé après création d'un sondage,
+/// pour que le sondage apparaisse en temps réel chez les autres clients).
+pub async fn emit_message_update(st: &AppState, cid: i64, mid: i64, viewer: i64) -> AppResult<()> {
+    let msg = hydrate(st, fetch_message_in_channel(st, cid, mid).await?, viewer).await?;
+    emit(st, cid, "MESSAGE_UPDATE", serde_json::to_value(&msg).unwrap_or_default()).await;
+    Ok(())
 }
 
 // ───────────────────────────── Mentions ─────────────────────────────
@@ -365,12 +468,17 @@ pub async fn list_messages(
     let ids: Vec<i64> = msgs.iter().map(|m| m.id.as_i64()).collect();
     let reactions = load_reactions(&st, &ids, user.id.as_i64()).await?;
     let attachments = load_attachments(&st, &ids).await?;
+    let poll_ids: std::collections::HashSet<i64> =
+        load_poll_ids(&st, &ids).await?.into_iter().collect();
     for m in &mut msgs {
         if let Some(rs) = reactions.get(&m.id.as_i64()) {
             m.reactions = rs.clone();
         }
         if let Some(a) = attachments.get(&m.id.as_i64()) {
             m.attachments = a.clone();
+        }
+        if poll_ids.contains(&m.id.as_i64()) {
+            m.poll = Some(build_poll(&st, m.id.as_i64(), user.id.as_i64()).await?);
         }
         if let Some(ref_id) = m.reference_id {
             m.referenced_message = fetch_referenced(&st, m.channel_id.as_i64(), ref_id.as_i64())
@@ -391,15 +499,81 @@ pub async fn create_message(
     Json(req): Json<CreateMessage>,
 ) -> AppResult<Json<Message>> {
     let cid = parse_i64(&cid)?;
+    // Anti-spam global par utilisateur (en plus du slowmode par salon, qui reste par-salon).
+    st.rate
+        .check(crate::ratelimit::MESSAGE, &user.id.to_string())
+        .map_err(AppError::rate_limited)?;
     let (gid, _owner, perms_acc) =
         pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
     let content = req.content.trim_end();
-    // Un message peut être vide s'il porte au moins une pièce jointe.
-    if (content.is_empty() && req.attachments.is_empty()) || content.chars().count() > 4000 {
+    // Embeds : nécessite EMBED_LINKS, assainis et bornés. Un message peut n'être QUE des embeds.
+    let embeds_json = if req.embeds.is_empty() {
+        None
+    } else {
+        if !perms::has(perms_acc, perms::EMBED_LINKS) {
+            return Err(AppError::forbidden(
+                "permission « Intégrer des liens » requise pour les embeds",
+            ));
+        }
+        sanitize_embeds(req.embeds.clone())
+    };
+    // Un message peut être vide s'il porte au moins une pièce jointe, un sticker OU un embed.
+    if (content.is_empty()
+        && req.attachments.is_empty()
+        && req.sticker_id.is_none()
+        && embeds_json.is_none())
+        || content.chars().count() > 4000
+    {
         return Err(AppError::bad_request(
-            "contenu de message invalide (1 à 4000 caractères, ou au moins une pièce jointe)",
+            "contenu de message invalide (1 à 4000 caractères, ou une pièce jointe / un sticker / un embed)",
         ));
     }
+    // Sticker : doit appartenir à la guilde du salon (pas de stickers en MP).
+    let sticker_id = match req.sticker_id {
+        Some(s) => {
+            let sid = s.as_i64();
+            let ok = sqlx::query("SELECT 1 FROM stickers WHERE id = ? AND guild_id = ?")
+                .bind(sid)
+                .bind(gid)
+                .fetch_optional(&st.pool)
+                .await?
+                .is_some();
+            if !ok {
+                return Err(AppError::bad_request("sticker introuvable dans cette guilde"));
+            }
+            Some(sid)
+        }
+        None => None,
+    };
+    // Fil verrouillé : seuls les modérateurs (MANAGE_CHANNELS) peuvent écrire. Un fil archivé
+    // (non verrouillé) est réactivé automatiquement à l'écriture (comportement Discord).
+    let thread_state: Option<(i64, i64, i64)> = sqlx::query(
+        "SELECT type AS kind, archived, locked FROM channels WHERE id = ?",
+    )
+    .bind(cid)
+    .fetch_optional(&st.pool)
+    .await?
+    .map(|r| {
+        (
+            r.get::<i64, _>("kind"),
+            r.get::<i64, _>("archived"),
+            r.get::<i64, _>("locked"),
+        )
+    });
+    if let Some((kind, archived, locked)) = thread_state {
+        if kind == 11 || kind == 12 {
+            if locked != 0 && !perms::has(perms_acc, perms::MANAGE_CHANNELS) {
+                return Err(AppError::forbidden("ce fil est verrouillé"));
+            }
+            if archived != 0 {
+                let _ = sqlx::query("UPDATE channels SET archived = 0, archived_at = NULL WHERE id = ?")
+                    .bind(cid)
+                    .execute(&st.pool)
+                    .await;
+            }
+        }
+    }
+
     // Timeout : un membre en sourdine ne peut pas écrire dans un salon de guilde.
     if gid != 0 {
         let until: Option<i64> = sqlx::query(
@@ -445,6 +619,18 @@ pub async fn create_message(
         }
     }
 
+    // Auto-modération : une règle `block` refuse le message (les gestionnaires sont exemptés).
+    if !content.is_empty() {
+        if let crate::routes_automod::AutomodVerdict::Block(rule) =
+            crate::routes_automod::check_message(&st, gid, cid, user.id.as_i64(), content, perms_acc)
+                .await
+        {
+            return Err(AppError::forbidden(format!(
+                "message bloqué par l'auto-modération ({rule})"
+            )));
+        }
+    }
+
     let reference_id = match req.reply_to {
         Some(s) => {
             let rid = s.as_i64();
@@ -464,8 +650,8 @@ pub async fn create_message(
     let id = st.ids.next();
     let now = now_ms();
     sqlx::query(
-        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, created_at, edited_at) \
-         VALUES (?, ?, ?, ?, 0, ?, ?, 0, ?, NULL)",
+        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, created_at, edited_at, sticker_id, embeds) \
+         VALUES (?, ?, ?, ?, 0, ?, ?, 0, ?, NULL, ?, ?)",
     )
     .bind(id.as_i64())
     .bind(cid)
@@ -474,6 +660,8 @@ pub async fn create_message(
     .bind(req.nonce.as_deref())
     .bind(reference_id)
     .bind(now)
+    .bind(sticker_id)
+    .bind(embeds_json.as_deref())
     .execute(&st.pool)
     .await?;
 
@@ -545,9 +733,45 @@ pub async fn insert_text_message(
     Ok(msg)
 }
 
+/// Insère un message **système** (ex. type 7 = arrivée d'un membre) et diffuse `MESSAGE_CREATE`.
+/// Best-effort : n'échoue jamais l'opération appelante (l'adhésion prime sur le message).
+pub async fn insert_system_message(st: &AppState, channel_id: i64, author_id: i64, kind: i64) {
+    let id = st.ids.next();
+    let now = now_ms();
+    let ins = sqlx::query(
+        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, created_at, edited_at) \
+         VALUES (?, ?, ?, '', ?, NULL, NULL, 0, ?, NULL)",
+    )
+    .bind(id.as_i64())
+    .bind(channel_id)
+    .bind(author_id)
+    .bind(kind)
+    .bind(now)
+    .execute(&st.pool)
+    .await;
+    if ins.is_err() {
+        return;
+    }
+    let msg = match fetch_message_in_channel(st, channel_id, id.as_i64()).await {
+        Ok(row) => match hydrate(st, row, author_id).await {
+            Ok(m) => m,
+            Err(_) => return,
+        },
+        Err(_) => return,
+    };
+    emit(
+        st,
+        channel_id,
+        "MESSAGE_CREATE",
+        serde_json::to_value(&msg).unwrap_or_default(),
+    )
+    .await;
+}
+
 /// Insère un message **émis par un webhook** et diffuse `MESSAGE_CREATE`.
 /// `author_id` = créateur du webhook (pour la jointure `users`) ; le nom/avatar de
 /// remplacement priment à l'affichage. Renvoie le message hydraté.
+#[allow(clippy::too_many_arguments)] // helper interne : surcharges nom/avatar/embeds explicites
 pub async fn insert_webhook_message(
     st: &AppState,
     channel_id: i64,
@@ -556,12 +780,14 @@ pub async fn insert_webhook_message(
     name_override: Option<&str>,
     avatar_override: Option<&str>,
     content: &str,
+    embeds: Vec<ozone_proto::dto::MessageEmbed>,
 ) -> AppResult<Message> {
     let id = st.ids.next();
     let now = now_ms();
+    let embeds_json = sanitize_embeds(embeds);
     sqlx::query(
-        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, webhook_id, author_name, author_avatar, created_at, edited_at) \
-         VALUES (?, ?, ?, ?, 0, NULL, NULL, 0, ?, ?, ?, ?, NULL)",
+        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, webhook_id, author_name, author_avatar, created_at, edited_at, embeds) \
+         VALUES (?, ?, ?, ?, 0, NULL, NULL, 0, ?, ?, ?, ?, NULL, ?)",
     )
     .bind(id.as_i64())
     .bind(channel_id)
@@ -571,6 +797,7 @@ pub async fn insert_webhook_message(
     .bind(name_override)
     .bind(avatar_override)
     .bind(now)
+    .bind(embeds_json.as_deref())
     .execute(&st.pool)
     .await?;
     process_mentions(st, channel_id, id.as_i64(), author_id, content).await?;
@@ -825,11 +1052,12 @@ pub async fn pin_message(
         .bind(cid)
         .execute(&st.pool)
         .await?;
+    // `message_id` + `pinned` : permet aux clients de mettre à jour le drapeau EN DIRECT.
     emit(
         &st,
         cid,
         "CHANNEL_PINS_UPDATE",
-        json!({ "channel_id": cid.to_string() }),
+        json!({ "channel_id": cid.to_string(), "message_id": mid.to_string(), "pinned": true }),
     )
     .await;
     Ok(Json(json!({ "ok": true })))
@@ -853,7 +1081,7 @@ pub async fn unpin_message(
         &st,
         cid,
         "CHANNEL_PINS_UPDATE",
-        json!({ "channel_id": cid.to_string() }),
+        json!({ "channel_id": cid.to_string(), "message_id": mid.to_string(), "pinned": false }),
     )
     .await;
     Ok(Json(json!({ "ok": true })))

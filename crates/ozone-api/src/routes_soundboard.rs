@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -120,6 +120,12 @@ pub async fn create_sound(
     .execute(&st.pool)
     .await?;
 
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_SOUNDBOARD_UPDATE",
+        serde_json::json!({ "guild_id": gid.to_string() }),
+    );
+
     Ok(Json(SoundboardSound {
         id,
         guild_id: Snowflake::from_i64(gid),
@@ -197,6 +203,12 @@ pub async fn update_sound(
     .execute(&st.pool)
     .await?;
 
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_SOUNDBOARD_UPDATE",
+        serde_json::json!({ "guild_id": gid.to_string() }),
+    );
+
     Ok(Json(row_to_sound(fetch_sound(&st, gid, sid).await?)))
 }
 
@@ -222,6 +234,12 @@ pub async fn delete_sound(
         .bind(gid)
         .execute(&st.pool)
         .await?;
+
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_SOUNDBOARD_UPDATE",
+        serde_json::json!({ "guild_id": gid.to_string() }),
+    );
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

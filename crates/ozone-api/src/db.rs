@@ -27,6 +27,12 @@ pub async fn connect_and_migrate(db_path: &str) -> anyhow::Result<SqlitePool> {
         .max_connections(5)
         .connect_with(opts)
         .await?;
+    // Migrations embarquées à la compilation (cf. migrations/) — inclut 0018 (profil serveur),
+    // 0019 (méthode d'adhésion), 0020 (style de couleur de rôle), 0021 (@everyone explicite),
+    // 0022 (paramètres de salon vocal/texte), 0023 (sticker_id sur les messages),
+    // 0024 (salon système de guilde), 0025 (règles d'auto-modération),
+    // 0026 (réglages de guilde : notifs/AFK/vanity), 0027 (embeds de message),
+    // 0028 (cycle de vie des fils : archivage/verrou/membres).
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }
@@ -108,11 +114,23 @@ pub async fn bootstrap_state(cfg: &Config) -> anyhow::Result<AppState> {
         .map(|s| s.into_bytes())
         .unwrap_or_else(|| secret.clone().into_bytes());
 
+    // Base HTTP du SFU (pour l'éviction de modération). HTTP clair, co-localisé par défaut.
+    let sfu_url = std::env::var("OZONE_SFU_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:8081".to_string());
+
     // Répertoire des pièces jointes (créé si absent).
     let upload_dir = std::env::var("OZONE_UPLOAD_DIR")
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir().join("ozone-uploads"));
     let _ = std::fs::create_dir_all(&upload_dir);
+
+    // Rate-limiting actif par défaut ; désactivable via OZONE_RATE_LIMIT=0 (bench/CI).
+    let rate_enabled = std::env::var("OZONE_RATE_LIMIT").map(|v| v != "0").unwrap_or(true);
+    // Confiance à X-Forwarded-For UNIQUEMENT derrière un reverse-proxy déclaré (sinon usurpation
+    // d'IP triviale qui annulerait le rate-limit par IP). Faux par défaut.
+    let trust_proxy = std::env::var("OZONE_TRUSTED_PROXY")
+        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+        .unwrap_or(false);
 
     Ok(AppState {
         pool,
@@ -123,6 +141,9 @@ pub async fn bootstrap_state(cfg: &Config) -> anyhow::Result<AppState> {
         presence: Arc::new(crate::presence::Registry::new()),
         sessions: Arc::new(crate::gateway_session::SessionRegistry::new()),
         voice_secret: Arc::new(voice_secret),
+        sfu_url: Arc::new(sfu_url),
         upload_dir: Arc::new(upload_dir),
+        rate: Arc::new(crate::ratelimit::RateLimiter::new(rate_enabled)),
+        trust_proxy,
     })
 }

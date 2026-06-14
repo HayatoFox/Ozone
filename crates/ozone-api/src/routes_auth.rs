@@ -4,7 +4,8 @@
 use crate::crypto;
 use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
-use crate::extract::AuthUser;
+use crate::extract::{AuthUser, ClientIp};
+use crate::ratelimit;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -17,6 +18,7 @@ use sqlx::Row;
 
 const ACCESS_TTL: u64 = 600; // 10 minutes
 const REFRESH_TTL_MS: i64 = 30 * 24 * 3600 * 1000; // 30 jours
+const MAX_SESSIONS_PER_USER: i64 = 10; // R9 — plafond d'appareils/sessions actives par compte
 
 fn check_gate(st: &AppState, gate_token: &Option<String>) -> AppResult<()> {
     if st.instance.gate_enabled {
@@ -49,6 +51,19 @@ async fn issue_tokens(st: &AppState, user_id: Snowflake) -> AppResult<TokenPair>
     .bind(created + REFRESH_TTL_MS)
     .execute(&st.pool)
     .await?;
+    // R9 — plafond de sessions par utilisateur : on conserve les MAX_SESSIONS plus récentes
+    // (déconnecte les plus anciennes au-delà). Borne l'accumulation d'acteurs/sessions.
+    // Tri départagé par `id DESC` (Snowflake monotone) : à `created_at` égal (reconnexions dans
+    // la même milliseconde), la session qu'on vient d'émettre — la plus récente — reste toujours
+    // dans le top N et n'est jamais supprimée juste après l'émission de son refresh token.
+    sqlx::query(
+        "DELETE FROM sessions WHERE user_id = ?1 AND id NOT IN \
+         (SELECT id FROM sessions WHERE user_id = ?1 ORDER BY created_at DESC, id DESC LIMIT ?2)",
+    )
+    .bind(user_id.as_i64())
+    .bind(MAX_SESSIONS_PER_USER)
+    .execute(&st.pool)
+    .await?;
     Ok(TokenPair {
         access_token: access,
         refresh_token: refresh,
@@ -60,8 +75,12 @@ async fn issue_tokens(st: &AppState, user_id: Snowflake) -> AppResult<TokenPair>
 /// `POST /auth/register`
 pub async fn register(
     State(st): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<RegisterRequest>,
 ) -> AppResult<Json<TokenPair>> {
+    st.rate
+        .check(ratelimit::REGISTER, &ip)
+        .map_err(AppError::rate_limited)?;
     check_gate(&st, &req.gate_token)?;
 
     // Le tout premier compte (futur propriétaire) contourne la politique d'inscription.
@@ -95,27 +114,52 @@ pub async fn register(
                         return Err(AppError::forbidden("invitation d'instance expirée"));
                     }
                 }
-                let max_uses: i64 = row.get("max_uses");
-                if max_uses > 0 && row.get::<i64, _>("uses") >= max_uses {
+                // R5 — consommation ATOMIQUE : l'incrément conditionnel sert de verrou.
+                // `WHERE … (max_uses = 0 OR uses < max_uses)` ⇒ deux inscriptions concurrentes
+                // sur une invitation à usage unique ne peuvent pas toutes deux réussir (SQLite
+                // sérialise les écritures ; `rows_affected == 0` signale l'épuisement).
+                let claimed = sqlx::query(
+                    "UPDATE instance_invites SET uses = uses + 1 \
+                     WHERE code = ? AND (max_uses = 0 OR uses < max_uses)",
+                )
+                .bind(&code)
+                .execute(&st.pool)
+                .await?
+                .rows_affected();
+                if claimed == 0 {
                     return Err(AppError::forbidden("invitation d'instance épuisée"));
                 }
+                // Le slot est réservé ; on le rend si la création échoue plus bas.
                 invite_to_consume = Some(code);
             }
             RegistrationPolicy::Open => {}
         }
     }
 
+    // Rembourse le slot d'invitation réservé (R5) si l'inscription échoue après la réservation.
+    let refund = |st: AppState, code: Option<String>| async move {
+        if let Some(c) = code {
+            let _ = sqlx::query("UPDATE instance_invites SET uses = MAX(0, uses - 1) WHERE code = ?")
+                .bind(&c)
+                .execute(&st.pool)
+                .await;
+        }
+    };
+
     let username = req.username.trim().to_lowercase();
     if username.len() < 2 || username.len() > 32 {
+        refund(st.clone(), invite_to_consume).await;
         return Err(AppError::bad_request("pseudo invalide (2 à 32 caractères)"));
     }
-    if req.password.len() < 8 {
-        return Err(AppError::bad_request(
-            "mot de passe trop court (8 caractères minimum)",
-        ));
+    // R3 — politique de mot de passe : longueur minimale + rejet des mots de passe trop faibles
+    // (denylist courante) et qui contiennent le pseudo.
+    if let Err(e) = validate_password_strength(&req.password, &username) {
+        refund(st.clone(), invite_to_consume).await;
+        return Err(e);
     }
     let email = req.email.trim().to_lowercase();
     if !email.contains('@') {
+        refund(st.clone(), invite_to_consume).await;
         return Err(AppError::bad_request("e-mail invalide"));
     }
 
@@ -125,53 +169,91 @@ pub async fn register(
         .fetch_optional(&st.pool)
         .await?;
     if exists.is_some() {
+        refund(st.clone(), invite_to_consume).await;
         return Err(AppError::conflict("pseudo ou e-mail déjà utilisé"));
     }
 
     let id = st.ids.next();
-    let pw = crypto::hash_password(&req.password).map_err(AppError::internal)?;
-    sqlx::query(
-        "INSERT INTO users (id, username, display_name, email, password_hash, avatar_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)",
-    )
-    .bind(id.as_i64())
-    .bind(&username)
-    .bind(req.display_name.as_deref())
-    .bind(&email)
-    .bind(&pw)
-    .bind(now_ms())
-    .execute(&st.pool)
-    .await?;
-
-    // Le premier compte devient propriétaire de l'instance (bootstrap).
-    let count: i64 = sqlx::query("SELECT COUNT(*) AS c FROM users")
-        .fetch_one(&st.pool)
-        .await?
-        .get("c");
-    let role = if count == 1 { "owner" } else { "user" };
-    sqlx::query("INSERT INTO instance_roles (user_id, role) VALUES (?, ?)")
+    // Création du compte. TOUTE erreur ici (hash, INSERT en collision sur une course concurrente,
+    // rôle d'instance, émission des jetons) doit REMBOURSER le slot d'invitation réservé plus haut
+    // (R5) — sinon une inscription échouée consommerait définitivement un usage.
+    let outcome: AppResult<TokenPair> = async {
+        let pw = crypto::hash_password(&req.password).map_err(AppError::internal)?;
+        sqlx::query(
+            "INSERT INTO users (id, username, display_name, email, password_hash, avatar_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)",
+        )
         .bind(id.as_i64())
-        .bind(role)
+        .bind(&username)
+        .bind(req.display_name.as_deref())
+        .bind(&email)
+        .bind(&pw)
+        .bind(now_ms())
         .execute(&st.pool)
         .await?;
-    if role == "owner" {
-        tracing::info!("Compte propriétaire de l'instance créé : « {} »", username);
-    }
 
-    if let Some(code) = invite_to_consume {
-        let _ = sqlx::query("UPDATE instance_invites SET uses = uses + 1 WHERE code = ?")
-            .bind(&code)
+        // Le premier compte devient propriétaire de l'instance (bootstrap).
+        let count: i64 = sqlx::query("SELECT COUNT(*) AS c FROM users")
+            .fetch_one(&st.pool)
+            .await?
+            .get("c");
+        let role = if count == 1 { "owner" } else { "user" };
+        sqlx::query("INSERT INTO instance_roles (user_id, role) VALUES (?, ?)")
+            .bind(id.as_i64())
+            .bind(role)
             .execute(&st.pool)
-            .await;
+            .await?;
+        if role == "owner" {
+            tracing::info!("Compte propriétaire de l'instance créé : « {} »", username);
+        }
+        issue_tokens(&st, id).await
     }
+    .await;
 
-    Ok(Json(issue_tokens(&st, id).await?))
+    match outcome {
+        Ok(tokens) => Ok(Json(tokens)),
+        Err(e) => {
+            refund(st.clone(), invite_to_consume).await;
+            Err(e)
+        }
+    }
+}
+
+/// Politique de mot de passe (R3) : ≥ 8 caractères, pas dans la denylist des mots de passe
+/// les plus courants, et ne contenant pas le pseudo. Sans dépendance externe (pas de zxcvbn/HIBP).
+fn validate_password_strength(password: &str, username: &str) -> AppResult<()> {
+    if password.len() < 8 {
+        return Err(AppError::bad_request(
+            "mot de passe trop court (8 caractères minimum)",
+        ));
+    }
+    let lower = password.to_lowercase();
+    const COMMON: &[&str] = &[
+        "password", "motdepasse", "12345678", "123456789", "1234567890", "azerty123",
+        "qwerty123", "11111111", "00000000", "iloveyou", "admin123", "letmein1", "password1",
+        "azertyuiop", "qwertyuiop", "motdepasse1",
+    ];
+    if COMMON.contains(&lower.as_str()) {
+        return Err(AppError::bad_request(
+            "mot de passe trop courant — choisis-en un plus robuste",
+        ));
+    }
+    if username.len() >= 3 && lower.contains(&username.to_lowercase()) {
+        return Err(AppError::bad_request(
+            "le mot de passe ne doit pas contenir ton pseudo",
+        ));
+    }
+    Ok(())
 }
 
 /// `POST /auth/login`
 pub async fn login(
     State(st): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<LoginRequest>,
 ) -> AppResult<Json<TokenPair>> {
+    st.rate
+        .check(ratelimit::LOGIN, &ip)
+        .map_err(AppError::rate_limited)?;
     check_gate(&st, &req.gate_token)?;
     let login = req.login.trim();
     let row = sqlx::query(
@@ -269,11 +351,7 @@ pub async fn change_password(
     if !crypto::verify_password(&req.current_password, &hash) {
         return Err(AppError::unauthorized("mot de passe actuel invalide"));
     }
-    if req.new_password.len() < 8 {
-        return Err(AppError::bad_request(
-            "nouveau mot de passe trop court (8 caractères minimum)",
-        ));
-    }
+    validate_password_strength(&req.new_password, "")?;
     let new_hash = crypto::hash_password(&req.new_password).map_err(AppError::internal)?;
     sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
         .bind(&new_hash)

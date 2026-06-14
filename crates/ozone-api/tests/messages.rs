@@ -73,7 +73,7 @@ async fn messages_flow() {
             .uri("/auth/register")
             .header("content-type", "application/json")
             .body(Body::from(
-                json!({"username":"alice","email":"a@x.fr","password":"motdepasse"}).to_string(),
+                json!({"username":"alice","email":"a@x.fr","password":"Sup3r-Ozone-Pw"}).to_string(),
             ))
             .unwrap()
     })

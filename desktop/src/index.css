@@ -1,0 +1,507 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/*
+ * Système de tokens « façon Discord » à 2 couches (cf. docs/UI-DISCORD-REFERENCE.md) :
+ *   - primitives : échelles de couleur constantes (--primary-NNN, --brand-500, …)
+ *   - alias sémantiques : portent le thème (--bg-*, --text-*, --mod-*, --status-*)
+ * Tailwind ne fait que référencer ces variables ⇒ changer de thème = échanger des tokens.
+ */
+@layer base {
+  :root {
+    /* ── primitives (constantes) ── */
+    --primary-130: #f2f3f5;
+    --primary-160: #ebedef;
+    --primary-200: #e3e5e8;
+    --primary-230: #dbdee1;
+    --primary-330: #b5bac1;
+    --primary-360: #949ba4;
+    --primary-400: #80848e;
+    --primary-400-hsl: 223 6% 53%;
+    --primary-500: #4e5058;
+    --primary-500-hsl: 228 6% 32.5%;
+    --primary-530: #41434a;
+    --primary-560: #383a40;
+    --primary-600: #313338;
+    --primary-630: #2b2d31;
+    --primary-660: #232428;
+    --primary-700: #1e1f22;
+    --primary-800: #111214;
+    /* ── Identité Ozone ── accent « iris électrique » + dégradé aurora (iris → cyan).
+       L'aurora est réservé aux moments de marque : logo, connexion, chargement. */
+    --brand-500: #6a5bff;
+    --brand-560: #5847eb;
+    --aurora-a: #6a5bff;
+    --aurora-b: #2fd4e6;
+    --green-360: #3ba55c;
+    --green-430: #248046;
+    --yellow-300: #fcb833;
+    --yellow-300-hsl: 40 97% 60%;
+    --red-400: #da3e44;
+    --red-430: #c93b41;
+    --blue-345: #5299ef;
+    --white-500: #ffffff;
+  }
+
+  /* ── alias sémantiques — thème sombre (défaut) : quasi-noir NEUTRE (zéro teinte bleue) ── */
+  :root,
+  .theme-dark {
+    color-scheme: dark;
+    --bg-deepest: #030303; /* rail serveurs (fond de fenêtre) */
+    --bg-sidebar: #101011; /* sidebar salons / membres (dans la carte) */
+    --bg-userpanel: #0a0a0a; /* panneau utilisateur */
+    --bg-chat: #171718; /* zone de chat (surface de la carte) */
+    --bg-field: #232324; /* composeur / champs */
+    --bg-floating: rgb(28 28 30 / 0.94); /* popouts / menus / tooltips (légère translucidité) */
+    --bg-modal: #1c1c1c; /* dialogue (toujours opaque) */
+    --bg-modal-nav: #141414; /* nav du dialogue */
+    --app-bg: #030303; /* fond de la fenêtre */
+    --card-ring: rgb(255 255 255 / 0.09); /* contour de la carte flottante */
+
+    /* voiles : survol/actif neutres, SÉLECTION teintée accent (signature Ozone) */
+    --mod-hover: rgb(255 255 255 / 0.04);
+    --mod-active: rgb(255 255 255 / 0.08);
+    --mod-selected: color-mix(in srgb, var(--accent) 16%, transparent);
+    --mentioned: hsl(var(--yellow-300-hsl) / 0.1);
+
+    --text-header: #f3f3f3;
+    --text-subtext: #b6b6b6;
+    --text-normal: #dcdcdc;
+    --text-muted: #8a8a8a;
+    --text-channel: #7c7c7c;
+    /* Liens teintés accent (identité) — légèrement éclaircis pour le contraste sur sombre. */
+    --text-link: color-mix(in srgb, var(--accent) 78%, white 22%);
+
+    --interactive-normal: #b6b6b6;
+    --interactive-hover: #dcdcdc;
+    --interactive-active: #ffffff;
+    --interactive-muted: #4e4e4e;
+
+    --accent: var(--brand-500); /* blurple conservé */
+    --accent-hover: var(--brand-560);
+
+    --status-online: var(--green-360);
+    --status-idle: var(--yellow-300);
+    --status-dnd: var(--red-400);
+    --status-offline: #6a6a6a;
+
+    --border: rgb(255 255 255 / 0.06); /* bordures claires visibles sur le quasi-noir */
+    --message-hover: rgb(255 255 255 / 0.03);
+    /* Pouce de défilement façon macOS : discret au repos, se renforce au survol. */
+    --scrollbar-thumb: rgb(255 255 255 / 0.1);
+    --scrollbar-thumb-hover: rgb(255 255 255 / 0.2);
+  }
+
+  /* ── thème clair ── */
+  .theme-light {
+    color-scheme: light;
+    --bg-deepest: var(--primary-200);
+    --bg-sidebar: var(--primary-130);
+    --bg-userpanel: var(--primary-160);
+    --bg-chat: var(--white-500);
+    --bg-field: var(--primary-160);
+    --bg-floating: rgb(255 255 255 / 0.96); /* presque opaque (lisibilité) */
+    --bg-modal: var(--white-500);
+    --bg-modal-nav: var(--primary-130);
+    --app-bg: var(--primary-200);
+
+    --mod-hover: hsl(var(--primary-400-hsl) / 0.16);
+    --mod-active: hsl(var(--primary-400-hsl) / 0.2);
+    --mod-selected: color-mix(in srgb, var(--accent) 13%, transparent);
+    --mentioned: hsl(var(--yellow-300-hsl) / 0.18);
+
+    --text-header: #060607;
+    --text-subtext: #4e5058;
+    --text-normal: #2e3338;
+    --text-muted: #5c5e66;
+    --text-channel: #5c5e66;
+    --text-link: #006ce7;
+
+    --interactive-normal: #4e5058;
+    --interactive-hover: #2e3338;
+    --interactive-active: #060607;
+    --interactive-muted: #c4c9ce;
+
+    --border: rgb(0 0 0 / 0.08);
+    --message-hover: rgb(0 0 0 / 0.03);
+    --scrollbar-thumb: rgb(0 0 0 / 0.18);
+    --scrollbar-thumb-hover: rgb(0 0 0 / 0.32);
+    --card-ring: rgb(0 0 0 / 0.1);
+  }
+
+  /* ── thème midnight — noir pur NEUTRE (max OLED) ── */
+  .theme-midnight {
+    color-scheme: dark;
+    --bg-deepest: #000000; /* rail */
+    --bg-sidebar: #000000; /* sidebar */
+    --bg-userpanel: #000000; /* panneau utilisateur */
+    --bg-chat: #050505; /* zone de chat */
+    --bg-field: #161616; /* composeur */
+    --bg-floating: rgb(14 14 16 / 0.95); /* popouts (légèrement levés sur le noir) */
+    --bg-modal: #0d0d0d;
+    --bg-modal-nav: #050505;
+    --app-bg: #000000;
+    --border: rgb(255 255 255 / 0.07); /* bordures claires visibles sur le noir */
+    --message-hover: rgb(255 255 255 / 0.03);
+    --scrollbar-thumb: rgb(255 255 255 / 0.1);
+    --scrollbar-thumb-hover: rgb(255 255 255 / 0.2);
+    --card-ring: rgb(255 255 255 / 0.1);
+  }
+
+  /* ── thème personnalisé — surfaces translucides sur un DÉGRADÉ de fond ── */
+  /* Le dégradé (--app-gradient) et l'accent (--custom-accent) sont posés en inline par le store. */
+  .theme-custom {
+    color-scheme: dark;
+    --app-bg: var(--app-gradient, linear-gradient(135deg, #5865f2, #c850c0));
+    --bg-deepest: rgb(0 0 0 / 0.58); /* rail */
+    --bg-sidebar: rgb(0 0 0 / 0.42); /* sidebar / membres */
+    --bg-userpanel: rgb(0 0 0 / 0.55); /* panneau utilisateur */
+    --bg-chat: rgb(0 0 0 / 0.32); /* zone de chat (laisse voir le dégradé) */
+    --bg-field: rgb(255 255 255 / 0.1); /* composeur */
+    --bg-floating: rgb(18 18 22 / 0.96); /* popouts opaques (lisibilité) */
+    --bg-modal: #17171d; /* dialogue opaque (pas de dégradé derrière) */
+    --bg-modal-nav: #101015;
+
+    --mod-hover: rgb(255 255 255 / 0.07);
+    --mod-active: rgb(255 255 255 / 0.12);
+    --mod-selected: color-mix(in srgb, var(--accent) 28%, rgb(255 255 255 / 0.08));
+    --mentioned: hsl(var(--yellow-300-hsl) / 0.16);
+
+    --text-header: #ffffff;
+    --text-subtext: #d8d8da;
+    --text-normal: #ececee;
+    --text-muted: #c2c2c8;
+    --text-channel: #c8c8ce;
+    --text-link: #cfe0ff;
+
+    --interactive-normal: #d8d8da;
+    --interactive-hover: #ffffff;
+    --interactive-active: #ffffff;
+    --interactive-muted: rgb(255 255 255 / 0.4);
+
+    --accent: var(--custom-accent, #5865f2);
+    --accent-hover: var(--custom-accent, #5865f2);
+
+    --status-online: var(--green-360);
+    --status-idle: var(--yellow-300);
+    --status-dnd: var(--red-400);
+    --status-offline: #b9b9c0;
+
+    --border: rgb(255 255 255 / 0.1);
+    --message-hover: rgb(255 255 255 / 0.06);
+    --scrollbar-thumb: rgb(0 0 0 / 0.4);
+    --card-ring: rgb(255 255 255 / 0.14);
+  }
+
+  :root {
+    color-scheme: dark;
+  }
+
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  body {
+    @apply text-normal font-sans antialiased;
+    /* Fond de l'app : couleur unie (thèmes standard) ou dégradé (thème personnalisé).
+       PAS de `background-attachment: fixed` : le body ne défile jamais (overflow hidden) et
+       ce mode déclenche un chemin de rendu pathologique sur Windows (compositor bloqué). */
+    background: var(--app-bg, #060606);
+    overflow: hidden;
+    /* Rendu type « Apple » : tracking légèrement resserré, ligatures, anti-alias soigné. */
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+    font-feature-settings: "cv05", "cv11", "ss01";
+    letter-spacing: -0.01em;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Courbes & durées d'animation maison (cohérence à l'échelle de l'app). */
+  :root {
+    --ease-smooth: cubic-bezier(0.32, 0.72, 0, 1); /* sortie douce « façon iOS » */
+    --ease-out: cubic-bezier(0.22, 1, 0.36, 1); /* décélération nette */
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1); /* léger rebond (overshoot) */
+    --dur-fast: 120ms;
+    --dur-normal: 180ms;
+    --dur-slow: 280ms;
+    /* Ombre/halo teintés accent — signature de marque pour les états actifs/CTA. */
+    --shadow-accent: 0 4px 14px color-mix(in srgb, var(--accent) 38%, transparent);
+    --glow-accent: 0 0 0 1px color-mix(in srgb, var(--accent) 50%, transparent),
+      0 0 16px color-mix(in srgb, var(--accent) 30%, transparent);
+  }
+
+  /* Titres : tracking resserré pour un rendu plus net et premium. */
+  h1, h2, h3 {
+    letter-spacing: -0.02em;
+  }
+
+  /* Sélection de texte teintée accent. */
+  ::selection {
+    background: color-mix(in srgb, var(--accent) 40%, transparent);
+  }
+
+  /* Anneau de focus clavier discret (n'apparaît qu'au focus-visible, pas au clic souris). */
+  :focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 4px;
+  }
+
+  /* Transitions douces par défaut sur les éléments interactifs. */
+  button,
+  a,
+  [role="button"] {
+    transition:
+      background-color 160ms var(--ease-out),
+      color 160ms var(--ease-out),
+      border-color 160ms var(--ease-out),
+      box-shadow 160ms var(--ease-out),
+      opacity 160ms var(--ease-out),
+      transform 140ms var(--ease-smooth);
+  }
+
+  /* Respect du réglage système « animations réduites ». */
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@layer utilities {
+  /* Bouton accent « premium » : léger dégradé vertical + reflet haut + ombre courte.
+     S'utilise à la place de `bg-accent` sur les CTA importants. */
+  .btn-accent {
+    background-image: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--accent) 88%, white 12%),
+      var(--accent)
+    );
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.18),
+      0 1px 3px rgb(0 0 0 / 0.35);
+  }
+  .btn-accent:hover {
+    filter: brightness(1.06);
+  }
+  .btn-accent:active {
+    filter: brightness(0.96);
+  }
+
+  /* ── Marque Ozone : dégradé aurora (iris → cyan), réservé aux moments de marque. ── */
+  .bg-aurora {
+    background-image: linear-gradient(135deg, var(--aurora-a), var(--aurora-b));
+  }
+  .text-aurora {
+    background-image: linear-gradient(120deg, var(--aurora-a), var(--aurora-b));
+    -webkit-background-clip: text;
+    background-clip: text;
+    color: transparent;
+  }
+  /* Halo de marque très doux (écrans vides / héros). */
+  .aurora-halo {
+    background:
+      radial-gradient(560px 280px at 50% 0%, color-mix(in srgb, var(--aurora-a) 14%, transparent), transparent 70%),
+      radial-gradient(420px 240px at 80% 20%, color-mix(in srgb, var(--aurora-b) 8%, transparent), transparent 70%);
+  }
+
+  /* Variante succès (vert) — mêmes principes. */
+  .btn-success {
+    background-image: linear-gradient(
+      180deg,
+      color-mix(in srgb, var(--status-online) 88%, white 12%),
+      var(--status-online)
+    );
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.18),
+      0 1px 3px rgb(0 0 0 / 0.35);
+  }
+  .btn-success:hover {
+    filter: brightness(1.06);
+  }
+  .btn-success:active {
+    filter: brightness(0.96);
+  }
+
+  /* Carte de surface : hairline + reflet haut très léger (profondeur sans lourdeur). */
+  .surface-card {
+    box-shadow:
+      inset 0 1px 0 rgb(255 255 255 / 0.04),
+      0 1px 2px rgb(0 0 0 / 0.25);
+  }
+
+  /* Barre de défilement façon Discord. */
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: var(--scrollbar-thumb) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb);
+    border-radius: 999px;
+    /* Plus discret au repos, se révèle au survol (façon macOS). */
+    opacity: 0.6;
+    transition: background-color 160ms var(--ease-out);
+  }
+  .scroll-thin:hover::-webkit-scrollbar-thumb {
+    background-color: var(--scrollbar-thumb-hover, var(--scrollbar-thumb));
+  }
+  .scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  /* ── Micro-interactions réutilisables (le cœur du « vivant ») ── */
+
+  /* Feedback d'enfoncement au clic : léger creux + ressort à la relâche. À poser sur tout
+     bouton/icône/chip interactif. (La transition transform globale sur `button` l'anime.) */
+  .pressable {
+    transition: transform var(--dur-fast) var(--ease-spring), filter var(--dur-fast) var(--ease-out);
+  }
+  .pressable:active {
+    transform: scale(0.92);
+  }
+  .pressable:disabled {
+    transform: none;
+    cursor: not-allowed;
+  }
+
+  /* Bouton-icône : zone de clic confortable, fond qui se révèle au survol, creux au clic. */
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--interactive-normal);
+    transition: background-color var(--dur-normal) var(--ease-out),
+      color var(--dur-normal) var(--ease-out), transform var(--dur-fast) var(--ease-spring);
+  }
+  .icon-btn:hover {
+    background-color: var(--mod-hover);
+    color: var(--interactive-hover);
+  }
+  .icon-btn:active {
+    transform: scale(0.9);
+  }
+
+  /* Élévation au survol : la carte/ligne « se soulève » légèrement (profondeur vivante). */
+  .hover-lift {
+    transition: transform var(--dur-normal) var(--ease-out), box-shadow var(--dur-normal) var(--ease-out);
+  }
+  .hover-lift:hover {
+    transform: translateY(-2px);
+    box-shadow: var(--tw-shadow, 0 12px 30px rgb(0 0 0 / 0.42));
+  }
+
+  /* Champ de saisie : anneau de focus qui se FOND (au lieu d'apparaître net). */
+  .field-focus {
+    transition: box-shadow var(--dur-normal) var(--ease-out), border-color var(--dur-normal) var(--ease-out);
+  }
+
+  /* Halo accent autour d'un élément actif (rail sélectionné, avatar qui parle…). */
+  .glow-accent {
+    box-shadow: var(--glow-accent);
+  }
+
+  /* ── Animations d'entrée additionnelles ── */
+
+  /* Pulsation douce de l'anneau « parle » en vocal (respiration, pas clignotement). */
+  .speak-pulse {
+    animation: speak-pulse 1.6s var(--ease-out) infinite;
+  }
+  @keyframes speak-pulse {
+    0%, 100% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--status-online) 55%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 4px color-mix(in srgb, var(--status-online) 22%, transparent);
+    }
+  }
+
+  /* Entrée d'une rangée de liste (utilisée avec un délai indexé pour le stagger). */
+  .animate-row-in {
+    animation: row-in var(--dur-slow) var(--ease-out) both;
+  }
+  @keyframes row-in {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Déploiement « accordéon » d'un panneau (formulaire qui s'ouvre). */
+  .animate-accordion {
+    animation: accordion-down var(--dur-normal) var(--ease-out);
+    overflow: hidden;
+  }
+  @keyframes accordion-down {
+    from {
+      opacity: 0;
+      transform: translateY(-6px) scaleY(0.96);
+      transform-origin: top;
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0) scaleY(1);
+      transform-origin: top;
+    }
+  }
+
+  /* Sortie de modale (à appliquer pendant la phase de fermeture différée). */
+  .animate-overlay-out {
+    animation: overlay-out var(--dur-fast) var(--ease-out) forwards;
+  }
+  @keyframes overlay-out {
+    to {
+      opacity: 0;
+    }
+  }
+  .animate-pop-out {
+    animation: pop-out var(--dur-fast) var(--ease-out) forwards;
+  }
+  @keyframes pop-out {
+    to {
+      opacity: 0;
+      transform: scale(0.97);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .speak-pulse,
+    .animate-row-in,
+    .animate-accordion {
+      animation: none;
+    }
+  }
+
+  /* Couleur de rôle « vague » : dégradé animé qui défile sur le texte. */
+  .role-name-wave {
+    animation: role-name-wave 3.5s linear infinite;
+  }
+  @keyframes role-name-wave {
+    to {
+      background-position: 200% center;
+    }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .role-name-wave {
+      animation: none;
+    }
+  }
+}

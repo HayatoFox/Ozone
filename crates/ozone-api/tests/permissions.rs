@@ -58,7 +58,7 @@ async fn register(app: &Router, username: &str, email: &str) -> String {
         .oneshot(req(
             "POST",
             "/auth/register",
-            Some(json!({"username": username, "email": email, "password": "motdepasse"})),
+            Some(json!({"username": username, "email": email, "password": "Sup3r-Ozone-Pw"})),
             None,
         ))
         .await

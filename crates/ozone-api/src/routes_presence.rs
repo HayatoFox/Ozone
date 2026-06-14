@@ -24,18 +24,27 @@ pub async fn set_presence(
             "statut invalide (online | idle | dnd | invisible)",
         ));
     }
-    let custom = match req.custom_status.as_deref().map(str::trim) {
-        Some(s) if !s.is_empty() => {
-            if s.chars().count() > 128 {
+    let uid = user.id.as_i64();
+    // Sémantique à 3 états sur custom_status :
+    //   None              → champ absent : PRÉSERVER le statut perso existant.
+    //   Some(None)        → null explicite : EFFACER.
+    //   Some(Some(texte)) → DÉFINIR (validé/borné, vide ⇒ effacer).
+    let custom = match req.custom_status {
+        None => st.presence.current_custom(uid),
+        Some(None) => None,
+        Some(Some(s)) => {
+            let t = s.trim();
+            if t.is_empty() {
+                None
+            } else if t.chars().count() > 128 {
                 return Err(AppError::bad_request(
                     "statut personnalisé trop long (max 128)",
                 ));
+            } else {
+                Some(t.to_string())
             }
-            Some(s.to_string())
         }
-        _ => None,
     };
-    let uid = user.id.as_i64();
     st.presence.set_status(uid, &req.status, custom.clone());
     // Diffuse le nouveau statut effectif aux guildes partagées.
     crate::gateway::broadcast_presence(&st, uid).await;

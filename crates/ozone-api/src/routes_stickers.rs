@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -127,6 +127,12 @@ pub async fn create_sticker(
     .execute(&st.pool)
     .await?;
 
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_STICKERS_UPDATE",
+        serde_json::json!({ "guild_id": gid.to_string() }),
+    );
+
     Ok(Json(Sticker {
         id,
         guild_id: Snowflake::from_i64(gid),
@@ -210,6 +216,12 @@ pub async fn update_sticker(
     .execute(&st.pool)
     .await?;
 
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_STICKERS_UPDATE",
+        serde_json::json!({ "guild_id": gid.to_string() }),
+    );
+
     Ok(Json(row_to_sticker(fetch_sticker(&st, gid, sid).await?)))
 }
 
@@ -235,6 +247,12 @@ pub async fn delete_sticker(
         .bind(gid)
         .execute(&st.pool)
         .await?;
+
+    st.publish(
+        EventScope::Guild(gid),
+        "GUILD_STICKERS_UPDATE",
+        serde_json::json!({ "guild_id": gid.to_string() }),
+    );
 
     Ok(Json(serde_json::json!({ "ok": true })))
 }

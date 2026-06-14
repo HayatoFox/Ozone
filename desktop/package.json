@@ -1,0 +1,37 @@
+{
+  "name": "ozone-desktop",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Client Ozone — interface façon Discord (React + TS + Vite, empaquetée Tauri).",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc -b && vite build",
+    "preview": "vite preview",
+    "typecheck": "tsc -b --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@fontsource-variable/inter": "^5.2.8",
+    "@radix-ui/react-context-menu": "^2.2.16",
+    "@radix-ui/react-popover": "^1.1.15",
+    "@radix-ui/react-tooltip": "^1.2.8",
+    "lucide-react": "^1.17.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "zustand": "^5.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.9.1",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.4",
+    "autoprefixer": "^10.4.20",
+    "postcss": "^8.4.49",
+    "tailwindcss": "^3.4.15",
+    "tailwindcss-animate": "^1.0.7",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.3",
+    "vitest": "^4.1.8"
+  }
+}

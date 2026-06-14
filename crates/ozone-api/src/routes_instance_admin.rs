@@ -49,6 +49,13 @@ pub async fn create_invite(
 ) -> AppResult<Json<InstanceInvite>> {
     pg::require_instance_admin(&st.pool, user.id.as_i64()).await?;
     let now = now_ms();
+    // Borne la durée (≤ 90 jours) + arithmétique sûre : `max_age` est contrôlé par l'appelant.
+    const MAX_INSTANCE_INVITE_AGE_SECS: i64 = 90 * 24 * 3600;
+    if req.max_age > MAX_INSTANCE_INVITE_AGE_SECS {
+        return Err(AppError::bad_request(
+            "durée de validité trop longue (max 90 jours)",
+        ));
+    }
     let expires_at = if req.max_age > 0 {
         Some(now + req.max_age * 1000)
     } else {

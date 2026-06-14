@@ -10,6 +10,9 @@ pub struct AppError {
     pub status: StatusCode,
     pub code: u32,
     pub message: String,
+    /// Délai conseillé avant nouvelle tentative (secondes) — émis en header `Retry-After`
+    /// pour les réponses 429 (rate-limiting).
+    pub retry_after: Option<u64>,
 }
 
 impl AppError {
@@ -18,6 +21,7 @@ impl AppError {
             status,
             code,
             message: message.into(),
+            retry_after: None,
         }
     }
     pub fn bad_request(msg: impl Into<String>) -> Self {
@@ -41,15 +45,34 @@ impl AppError {
     pub fn too_many(msg: impl Into<String>) -> Self {
         Self::new(StatusCode::TOO_MANY_REQUESTS, 20016, msg)
     }
+    /// 429 avec un délai d'attente conseillé (`Retry-After`).
+    pub fn rate_limited(secs: u64) -> Self {
+        let mut e = Self::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            20016,
+            "trop de requêtes — réessaie dans un instant",
+        );
+        e.retry_after = Some(secs);
+        e
+    }
 }
 
 impl IntoResponse for AppError {
     fn into_response(self) -> Response {
-        (
-            self.status,
-            Json(json!({ "code": self.code, "message": self.message })),
-        )
-            .into_response()
+        let body = Json(json!({
+            "code": self.code,
+            "message": self.message,
+            "retry_after": self.retry_after,
+        }));
+        match self.retry_after {
+            Some(secs) => (
+                self.status,
+                [(axum::http::header::RETRY_AFTER, secs.to_string())],
+                body,
+            )
+                .into_response(),
+            None => (self.status, body).into_response(),
+        }
     }
 }
 

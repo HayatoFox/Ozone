@@ -1,6 +1,7 @@
 //! Profil public (lecture/édition de son propre profil) et réglages client (blob JSON privé).
 //! Cf. docs/features/08-profil.md, 15-parametres-utilisateur.md.
 
+use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::state::AppState;
@@ -11,9 +12,28 @@ use ozone_proto::dto::{UpdateProfile, UserProfile, UserSettings};
 use ozone_proto::Snowflake;
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
 
 const PROFILE_SELECT: &str = "SELECT id, username, display_name, avatar_id, bio, pronouns, banner_id, accent_color, created_at FROM users";
 const MAX_SETTINGS_BYTES: usize = 64 * 1024;
+
+// Anti-spam du profil : chaque PATCH déclenche un USER_UPDATE en fan-out (amis, MP, guildes
+// partagées) → **10 par fenêtre glissante de 10 min et par utilisateur** (même posture que
+// l'icône de guilde, §88/§95).
+static PROFILE_UPDATE_HITS: OnceLock<Mutex<HashMap<i64, Vec<i64>>>> = OnceLock::new();
+fn profile_update_allowed(uid: i64) -> bool {
+    let now = now_ms();
+    let lock = PROFILE_UPDATE_HITS.get_or_init(|| Mutex::new(HashMap::new()));
+    let mut map = lock.lock().unwrap_or_else(|e| e.into_inner());
+    let hits = map.entry(uid).or_default();
+    hits.retain(|t| now - *t < 600_000);
+    if hits.len() >= 10 {
+        return false;
+    }
+    hits.push(now);
+    true
+}
 
 fn row_to_profile(r: SqliteRow) -> UserProfile {
     UserProfile {
@@ -69,6 +89,11 @@ pub async fn update_profile(
     Json(req): Json<UpdateProfile>,
 ) -> AppResult<Json<UserProfile>> {
     let uid = user.id.as_i64();
+    if !profile_update_allowed(uid) {
+        return Err(AppError::too_many(
+            "trop de modifications du profil — réessaie dans quelques minutes",
+        ));
+    }
     let cur = fetch_profile(&st, uid).await?;
 
     let display_name = text_field(&req.display_name, cur.display_name, 32, "nom affiché")?;
@@ -101,6 +126,9 @@ pub async fn update_profile(
     .execute(&st.pool)
     .await?;
 
+    // Propage le nouveau profil public (pseudo/avatar) EN DIRECT : soi, amis, MP, guildes partagées.
+    crate::gateway::broadcast_user_update(&st, uid).await;
+
     Ok(Json(fetch_profile(&st, uid).await?))
 }
 
@@ -112,6 +140,64 @@ pub async fn get_profile(
 ) -> AppResult<Json<UserProfile>> {
     let target = parse_i64(&target)?;
     Ok(Json(fetch_profile(&st, target).await?))
+}
+
+/// `GET /users/:user_id/mutual` — guildes & amis **en commun** entre l'appelant et la cible.
+/// Sert le panneau de profil des MP (« Serveurs en commun », « Amis en commun »).
+pub async fn get_mutual(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Path(target): Path<String>,
+) -> AppResult<Json<serde_json::Value>> {
+    let me = user.id.as_i64();
+    let target = parse_i64(&target)?;
+
+    let guilds = sqlx::query(
+        "SELECT g.id, g.name, g.icon_id FROM guilds g \
+         JOIN guild_members m1 ON m1.guild_id = g.id AND m1.user_id = ? \
+         JOIN guild_members m2 ON m2.guild_id = g.id AND m2.user_id = ?",
+    )
+    .bind(me)
+    .bind(target)
+    .fetch_all(&st.pool)
+    .await?;
+    let guilds: Vec<serde_json::Value> = guilds
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.get::<i64, _>("id").to_string(),
+                "name": r.get::<String, _>("name"),
+                "icon_id": r.get::<Option<String>, _>("icon_id"),
+            })
+        })
+        .collect();
+
+    // Amis communs : utilisateurs amis (`type='friend'`) à la fois de l'appelant ET de la cible.
+    let friends = sqlx::query(
+        "SELECT u.id, u.username, u.display_name, u.avatar_id \
+         FROM relationships r1 \
+         JOIN relationships r2 ON r1.target_id = r2.target_id \
+         JOIN users u ON u.id = r1.target_id \
+         WHERE r1.user_id = ? AND r1.type = 'friend' \
+           AND r2.user_id = ? AND r2.type = 'friend'",
+    )
+    .bind(me)
+    .bind(target)
+    .fetch_all(&st.pool)
+    .await?;
+    let friends: Vec<serde_json::Value> = friends
+        .iter()
+        .map(|r| {
+            serde_json::json!({
+                "id": r.get::<i64, _>("id").to_string(),
+                "username": r.get::<String, _>("username"),
+                "display_name": r.get::<Option<String>, _>("display_name"),
+                "avatar_id": r.get::<Option<String>, _>("avatar_id"),
+            })
+        })
+        .collect();
+
+    Ok(Json(serde_json::json!({ "guilds": guilds, "friends": friends })))
 }
 
 // ───────────────────────────── Réglages client ─────────────────────────────

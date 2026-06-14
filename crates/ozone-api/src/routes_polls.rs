@@ -20,7 +20,7 @@ const MAX_ANSWERS: usize = 10;
 const MAX_DURATION_HOURS: i64 = 768; // 32 jours
 
 /// Construit le DTO `Poll` (réponses + décomptes + vote de l'utilisateur courant).
-async fn build_poll(st: &AppState, mid: i64, viewer: i64) -> AppResult<Poll> {
+pub async fn build_poll(st: &AppState, mid: i64, viewer: i64) -> AppResult<Poll> {
     let p = sqlx::query(
         "SELECT channel_id, question, multiselect, expires_at FROM polls WHERE message_id = ?",
     )
@@ -132,6 +132,9 @@ pub async fn create_poll(
             .execute(&st.pool)
             .await?;
     }
+    // Le message porteur a déjà diffusé un MESSAGE_CREATE (sans sondage, les réponses n'existaient
+    // pas encore) ; on rediffuse un MESSAGE_UPDATE avec le sondage attaché pour l'affichage live.
+    crate::routes_messages::emit_message_update(&st, cid, mid, user.id.as_i64()).await?;
     Ok(Json(build_poll(&st, mid, user.id.as_i64()).await?))
 }
 

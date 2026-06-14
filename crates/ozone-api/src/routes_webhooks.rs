@@ -97,6 +97,7 @@ pub async fn create_webhook(
     .bind(now)
     .execute(&st.pool)
     .await?;
+    crate::routes_moderation::audit_named(&st, gid, user.id.as_i64(), "webhook_create", &name).await;
     Ok(Json(Webhook {
         id,
         channel_id: Snowflake::from_i64(cid),
@@ -245,6 +246,8 @@ pub async fn delete_webhook(
     let wid = parse_i64(&wid)?;
     let wh = fetch_webhook(&st, wid).await?;
     let channel_id: i64 = wh.get("channel_id");
+    let wh_name: String = wh.get("name");
+    let wh_guild: i64 = wh.get("guild_id");
     pg::require_channel_perm(
         &st.pool,
         channel_id,
@@ -256,6 +259,8 @@ pub async fn delete_webhook(
         .bind(wid)
         .execute(&st.pool)
         .await?;
+    crate::routes_moderation::audit_named(&st, wh_guild, user.id.as_i64(), "webhook_delete", &wh_name)
+        .await;
     Ok(Json(json!({ "ok": true })))
 }
 
@@ -283,6 +288,10 @@ pub async fn execute_webhook(
     if real.as_bytes() != token.as_bytes() {
         return Err(AppError::unauthorized("webhook ou jeton invalide"));
     }
+    // R6 — quota par webhook : un détenteur de jeton ne peut pas spammer sans session.
+    st.rate
+        .check(crate::ratelimit::WEBHOOK, &wid.to_string())
+        .map_err(AppError::rate_limited)?;
     let channel_id: i64 = wh.get("channel_id");
     let created_by: i64 = wh.get("created_by");
 
@@ -292,9 +301,10 @@ pub async fn execute_webhook(
     }
 
     let content = req.content.trim_end();
-    if content.is_empty() || content.chars().count() > 4000 {
+    // Un webhook peut n'envoyer QUE des embeds (cas CI/monitoring courant).
+    if content.chars().count() > 4000 || (content.is_empty() && req.embeds.is_empty()) {
         return Err(AppError::bad_request(
-            "contenu de message invalide (1 à 4000 caractères)",
+            "contenu de message invalide (≤ 4000 caractères, ou au moins un embed)",
         ));
     }
     // Surcharge facultative du nom d'affichage (validée comme un nom de webhook).
@@ -314,6 +324,7 @@ pub async fn execute_webhook(
         name_override.as_deref(),
         avatar_override.as_deref(),
         content,
+        req.embeds,
     )
     .await?;
 

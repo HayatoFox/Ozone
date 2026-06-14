@@ -11,8 +11,18 @@ use axum::extract::{Path, State};
 use axum::Json;
 use ozone_proto::dto::{AuditLogEntry, Ban, CreateBan, UpdateMember, User};
 use ozone_proto::{perms, Snowflake};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use sqlx::Row;
+
+/// Filtres de pagination du journal d'audit.
+#[derive(Debug, Deserialize)]
+pub struct AuditQuery {
+    pub before: Option<String>,
+    pub limit: Option<i64>,
+    pub action_type: Option<String>,
+    pub user_id: Option<String>,
+}
 
 /// Enregistre une entrée d'audit (best-effort, n'échoue jamais l'action principale).
 pub async fn record_audit(
@@ -23,10 +33,24 @@ pub async fn record_audit(
     action: &str,
     reason: Option<&str>,
 ) {
+    record_audit_changes(st, guild_id, actor, target, action, reason, None).await;
+}
+
+/// Variante avec détails JSON (nom de l'entité, avant/après). Best-effort.
+pub async fn record_audit_changes(
+    st: &AppState,
+    guild_id: i64,
+    actor: i64,
+    target: Option<i64>,
+    action: &str,
+    reason: Option<&str>,
+    changes: Option<Value>,
+) {
     let id = st.ids.next();
+    let changes_str = changes.map(|c| c.to_string());
     let _ = sqlx::query(
         "INSERT INTO audit_log (id, guild_id, user_id, target_id, action_type, reason, changes, created_at) \
-         VALUES (?, ?, ?, ?, ?, ?, NULL, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
     )
     .bind(id.as_i64())
     .bind(guild_id)
@@ -34,8 +58,23 @@ pub async fn record_audit(
     .bind(target)
     .bind(action)
     .bind(reason)
+    .bind(changes_str)
     .bind(now_ms())
     .execute(&st.pool)
+    .await;
+}
+
+/// Audit « léger » prenant un nom d'entité comme seul détail (cas le plus courant).
+pub async fn audit_named(st: &AppState, gid: i64, actor: i64, action: &str, name: &str) {
+    record_audit_changes(
+        st,
+        gid,
+        actor,
+        None,
+        action,
+        None,
+        Some(json!({ "name": name })),
+    )
     .await;
 }
 
@@ -297,33 +336,50 @@ pub async fn update_member(
 
 // ───────────────────────────── Journal d'audit ─────────────────────────────
 
-/// `GET /guilds/:guild_id/audit-logs`
+/// `GET /guilds/:guild_id/audit-logs?before=&limit=&action_type=&user_id=`
 pub async fn list_audit_logs(
     State(st): State<AppState>,
     user: AuthUser,
     Path(gid): Path<String>,
+    axum::extract::Query(q): axum::extract::Query<AuditQuery>,
 ) -> AppResult<Json<Vec<AuditLogEntry>>> {
     let gid = parse_i64(&gid)?;
     pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::VIEW_AUDIT_LOG).await?;
+    let limit = q.limit.unwrap_or(50).clamp(1, 100);
+    // Pagination par curseur (id décroissant) + filtres optionnels acteur / type d'action.
+    let before = q.before.as_deref().and_then(|s| s.parse::<i64>().ok());
+    let actor = q.user_id.as_deref().and_then(|s| s.parse::<i64>().ok());
     let rows = sqlx::query(
-        "SELECT id, user_id, target_id, action_type, reason, created_at \
-         FROM audit_log WHERE guild_id = ? ORDER BY id DESC LIMIT 50",
+        "SELECT id, user_id, target_id, action_type, reason, changes, created_at \
+         FROM audit_log \
+         WHERE guild_id = ?1 \
+           AND (?2 IS NULL OR id < ?2) \
+           AND (?3 IS NULL OR action_type = ?3) \
+           AND (?4 IS NULL OR user_id = ?4) \
+         ORDER BY id DESC LIMIT ?5",
     )
     .bind(gid)
+    .bind(before)
+    .bind(q.action_type.as_deref())
+    .bind(actor)
+    .bind(limit)
     .fetch_all(&st.pool)
     .await?;
-    Ok(Json(
-        rows.into_iter()
-            .map(|r| AuditLogEntry {
-                id: Snowflake::from_i64(r.get::<i64, _>("id")),
-                user_id: Snowflake::from_i64(r.get::<i64, _>("user_id")),
-                target_id: r
-                    .get::<Option<i64>, _>("target_id")
-                    .map(Snowflake::from_i64),
-                action_type: r.get("action_type"),
-                reason: r.get("reason"),
-                created_at: r.get::<i64, _>("created_at") as u64,
-            })
-            .collect(),
-    ))
+    Ok(Json(rows.into_iter().map(row_to_audit).collect()))
+}
+
+fn row_to_audit(r: sqlx::sqlite::SqliteRow) -> AuditLogEntry {
+    AuditLogEntry {
+        id: Snowflake::from_i64(r.get::<i64, _>("id")),
+        user_id: Snowflake::from_i64(r.get::<i64, _>("user_id")),
+        target_id: r
+            .get::<Option<i64>, _>("target_id")
+            .map(Snowflake::from_i64),
+        action_type: r.get("action_type"),
+        reason: r.get("reason"),
+        changes: r
+            .get::<Option<String>, _>("changes")
+            .and_then(|s| serde_json::from_str(&s).ok()),
+        created_at: r.get::<i64, _>("created_at") as u64,
+    }
 }

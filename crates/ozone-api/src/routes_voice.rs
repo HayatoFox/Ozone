@@ -23,8 +23,8 @@ use serde_json::{json, Value};
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
 
-/// Emplacement du nœud média — à configurer lors du déploiement d'un SFU (placeholder).
-const VOICE_ENDPOINT: &str = "wss://voice.ozone.local/sfu";
+/// Emplacement **par défaut** du nœud média SFU ; surchargeable via `OZONE_VOICE_ENDPOINT`.
+const VOICE_ENDPOINT: &str = "http://127.0.0.1:8081";
 const VOICE_TOKEN_TTL: u64 = 3600;
 const VS_SELECT: &str = "SELECT user_id, guild_id, channel_id, session_id, self_mute, self_deaf, \
      self_video, self_stream, mute, deaf, suppress FROM voice_states";
@@ -140,7 +140,8 @@ pub async fn update_own_voice_state(
         );
         let connection = VoiceConnectionInfo {
             token,
-            endpoint: VOICE_ENDPOINT.to_string(),
+            endpoint: std::env::var("OZONE_VOICE_ENDPOINT")
+                .unwrap_or_else(|_| VOICE_ENDPOINT.to_string()),
             guild_id: Snowflake::from_i64(gid),
             channel_id: target,
             session_id,
@@ -242,6 +243,14 @@ pub async fn moderate_voice_state(
         .filter(|v| v.guild_id.as_i64() == gid)
         .ok_or_else(|| AppError::not_found("ce membre n'est pas connecté au vocal"))?;
 
+    // Pas d'auto-modération via cette route (le self passe par /@me) : sinon un porteur de
+    // MUTE_MEMBERS pourrait lever un mute serveur imposé par autrui.
+    if target == me {
+        return Err(AppError::forbidden(
+            "utilise tes propres contrôles vocaux (pas la modération) sur toi-même",
+        ));
+    }
+
     // Le propriétaire ne peut pas être modéré en vocal.
     let owner = pg::guild_owner(&st.pool, gid)
         .await?
@@ -250,6 +259,18 @@ pub async fn moderate_voice_state(
         return Err(AppError::forbidden(
             "impossible de modérer le propriétaire en vocal",
         ));
+    }
+
+    // Hiérarchie de rôles : on ne peut modérer en vocal qu'un membre STRICTEMENT en dessous de soi
+    // (cohérent avec expulsion/bannissement). Le propriétaire (déjà écarté) domine tout le monde.
+    if me != owner {
+        let actor_pos = pg::highest_role_position(&st.pool, gid, owner, me).await?;
+        let target_pos = pg::highest_role_position(&st.pool, gid, owner, target).await?;
+        if actor_pos <= target_pos {
+            return Err(AppError::forbidden(
+                "ce membre est au-dessus ou au même niveau que vous dans la hiérarchie",
+            ));
+        }
     }
 
     if req.mute.is_some() {
@@ -263,21 +284,28 @@ pub async fn moderate_voice_state(
     }
 
     if req.disconnect == Some(true) {
+        // Salon où le pair média vit actuellement (pour l'évincer côté SFU).
+        let cur_channel = existing.channel_id.map(|s| s.as_i64()).unwrap_or(0);
         sqlx::query("DELETE FROM voice_states WHERE user_id = ? AND guild_id = ?")
             .bind(target)
             .bind(gid)
             .execute(&st.pool)
             .await?;
+        // Coupe RÉELLEMENT son flux média (sinon le SFU continuerait de le relayer).
+        if cur_channel != 0 {
+            crate::sfu_client::evict_voice_peer(&st, cur_channel, target);
+        }
         emit_left(&st, gid, target).await;
         return Ok(Json(json!({ "ok": true })));
     }
 
+    let old_channel = existing.channel_id.map(|s| s.as_i64()).unwrap_or(0);
     let new_channel = match req.channel_id {
         Some(c) => {
             ensure_voice_channel(&st, gid, c.as_i64()).await?;
             c.as_i64()
         }
-        None => existing.channel_id.map(|s| s.as_i64()).unwrap_or(0),
+        None => old_channel,
     };
     let mute = req.mute.unwrap_or(existing.mute) as i64;
     let deaf = req.deaf.unwrap_or(existing.deaf) as i64;
@@ -289,6 +317,11 @@ pub async fn moderate_voice_state(
         .bind(gid)
         .execute(&st.pool)
         .await?;
+    // Déplacement forcé : le pair média est encore dans l'ANCIEN salon SFU → on l'en évince pour
+    // ne pas y laisser de flux fantôme (le client rejoindra le nouveau salon via VOICE_STATE_UPDATE).
+    if new_channel != old_channel && old_channel != 0 {
+        crate::sfu_client::evict_voice_peer(&st, old_channel, target);
+    }
     let vs = fetch_voice_state(&st, target)
         .await?
         .ok_or_else(|| AppError::internal("état vocal introuvable"))?;
@@ -319,10 +352,16 @@ pub async fn voice_regions(
 pub async fn disconnect_all_voice(st: &AppState, uid: i64) {
     if let Ok(Some(vs)) = fetch_voice_state(st, uid).await {
         let gid = vs.guild_id.as_i64();
+        let channel = vs.channel_id.map(|s| s.as_i64()).unwrap_or(0);
         let _ = sqlx::query("DELETE FROM voice_states WHERE user_id = ?")
             .bind(uid)
             .execute(&st.pool)
             .await;
+        // Coupe le flux média résiduel côté SFU (session fermée brutalement → le pair WebRTC
+        // pourrait survivre quelques instants ; on force son éviction).
+        if channel != 0 {
+            crate::sfu_client::evict_voice_peer(st, channel, uid);
+        }
         emit_left(st, gid, uid).await;
     }
 }

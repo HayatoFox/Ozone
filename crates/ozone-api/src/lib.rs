@@ -11,8 +11,10 @@ pub mod gateway;
 pub mod gateway_session;
 pub mod permissions;
 pub mod presence;
+pub mod ratelimit;
 pub mod routes_attachments;
 pub mod routes_auth;
+pub mod routes_automod;
 pub mod routes_chat;
 pub mod routes_discovery;
 pub mod routes_dms;
@@ -30,6 +32,7 @@ pub mod routes_relationships;
 pub mod routes_roles;
 pub mod routes_soundboard;
 pub mod routes_stickers;
+pub mod sfu_client;
 pub mod routes_users;
 pub mod routes_voice;
 pub mod routes_webhooks;
@@ -94,6 +97,7 @@ pub fn build_app(state: AppState) -> Router {
         .route("/users/@me/password", patch(routes_auth::change_password))
         .route("/users/@me/email", patch(routes_auth::change_email))
         .route("/users/:user_id/profile", get(routes_users::get_profile))
+        .route("/users/:user_id/mutual", get(routes_users::get_mutual))
         // Relations (amis / blocages / notes)
         .route(
             "/users/@me/relationships",
@@ -200,7 +204,9 @@ pub fn build_app(state: AppState) -> Router {
         // Rôles & permissions
         .route(
             "/guilds/:guild_id/roles",
-            get(routes_roles::list_roles).post(routes_roles::create_role),
+            get(routes_roles::list_roles)
+                .post(routes_roles::create_role)
+                .patch(routes_roles::reorder_roles),
         )
         .route(
             "/guilds/:guild_id/roles/:role_id",
@@ -211,14 +217,30 @@ pub fn build_app(state: AppState) -> Router {
             put(routes_roles::add_member_role).delete(routes_roles::remove_member_role),
         )
         .route(
+            "/channels/:channel_id/permissions",
+            get(routes_roles::list_overwrites),
+        )
+        .route(
             "/channels/:channel_id/permissions/:overwrite_id",
             put(routes_roles::set_overwrite).delete(routes_roles::delete_overwrite),
+        )
+        .route(
+            "/channels/:channel_id/sync-permissions",
+            post(routes_chat::sync_channel_permissions),
+        )
+        .route(
+            "/channels/:channel_id/thread-members/@me",
+            put(routes_chat::join_thread).delete(routes_chat::leave_thread),
         )
         // Membres & invitations
         .route("/guilds/:guild_id/members", get(routes_guild::list_members))
         .route(
             "/guilds/:guild_id/members/@me",
             delete(routes_guild::leave_guild),
+        )
+        .route(
+            "/guilds/:guild_id/transfer",
+            post(routes_guild::transfer_guild),
         )
         .route(
             "/guilds/:guild_id/presences",
@@ -253,6 +275,14 @@ pub fn build_app(state: AppState) -> Router {
             get(routes_moderation::list_audit_logs),
         )
         .route(
+            "/guilds/:guild_id/automod/rules",
+            get(routes_automod::list_rules).post(routes_automod::create_rule),
+        )
+        .route(
+            "/guilds/:guild_id/automod/rules/:rule_id",
+            patch(routes_automod::update_rule).delete(routes_automod::delete_rule),
+        )
+        .route(
             "/guilds/:guild_id/invites",
             get(routes_guild::list_invites).post(routes_guild::create_invite),
         )
@@ -274,12 +304,38 @@ pub fn build_app(state: AppState) -> Router {
             get(routes_emojis::list_emojis).post(routes_emojis::create_emoji),
         )
         .route(
+            "/guilds/:guild_id/emojis/image",
+            post(routes_emojis::upload_emoji_image)
+                // Body un peu plus large que la limite applicative (512 Kio) pour laisser passer
+                // le surcoût multipart ; le handler renvoie un 400 clair au-delà de 512 Kio.
+                .layer(DefaultBodyLimit::max(768 * 1024)),
+        )
+        .route(
             "/guilds/:guild_id/emojis/:emoji_id",
             patch(routes_emojis::update_emoji).delete(routes_emojis::delete_emoji),
         )
+        .route("/emojis/:emoji_id", get(routes_emojis::serve_emoji))
+        // Images de guilde (icône / bannière) : upload authentifié + service public décoratif.
+        .route(
+            "/guilds/:guild_id/images",
+            post(routes_emojis::upload_guild_image).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route("/guilds/:guild_id/icon", get(routes_emojis::serve_guild_icon))
+        .route("/guilds/:guild_id/banner", get(routes_emojis::serve_guild_banner))
+        // Images de profil utilisateur (avatar / bannière) : upload authentifié + service public.
+        .route(
+            "/users/@me/images",
+            post(routes_emojis::upload_user_image).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        )
+        .route("/users/:user_id/avatar", get(routes_emojis::serve_user_avatar))
+        .route("/users/:user_id/banner", get(routes_emojis::serve_user_banner))
         .route(
             "/guilds/:guild_id/stickers",
             get(routes_stickers::list_stickers).post(routes_stickers::create_sticker),
+        )
+        .route(
+            "/guilds/:guild_id/stickers/image",
+            post(routes_emojis::upload_sticker_image).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
         )
         .route(
             "/guilds/:guild_id/stickers/:sticker_id",
@@ -292,6 +348,16 @@ pub fn build_app(state: AppState) -> Router {
         .route(
             "/guilds/:guild_id/soundboard/:sound_id",
             patch(routes_soundboard::update_sound).delete(routes_soundboard::delete_sound),
+        )
+        // Assets des expressions : image de sticker (publique) et audio du soundboard.
+        .route("/stickers/:sticker_id", get(routes_emojis::serve_sticker))
+        .route(
+            "/guilds/:guild_id/soundboard/audio",
+            post(routes_emojis::upload_sound_audio).layer(DefaultBodyLimit::max(1024 * 1024)),
+        )
+        .route(
+            "/soundboard-sounds/:id/audio",
+            get(routes_emojis::serve_sound_audio),
         )
         // Marqueurs de lecture & notifications
         .route(
@@ -383,6 +449,12 @@ pub async fn run() -> anyhow::Result<()> {
 
     let listener = tokio::net::TcpListener::bind(bind.as_str()).await?;
     tracing::info!("API Ozone à l'écoute sur http://{bind}  (gateway : ws://{bind}/gateway)");
-    axum::serve(listener, app).await?;
+    // `ConnectInfo` expose l'adresse de connexion aux extracteurs (rate-limiting par IP).
+    // En prod derrière un reverse-proxy, l'IP cliente réelle vient de `X-Forwarded-For`.
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

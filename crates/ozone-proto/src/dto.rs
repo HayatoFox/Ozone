@@ -141,6 +141,33 @@ pub struct Guild {
     pub description: Option<String>,
     #[serde(default)]
     pub discoverable: bool,
+    /// Couleur de base de la bannière (dégradé vers le bas) si pas d'image.
+    #[serde(default)]
+    pub banner_color: Option<i64>,
+    /// Image de bannière téléversée (prioritaire sur `banner_color`).
+    #[serde(default)]
+    pub banner_id: Option<String>,
+    /// Jeux joués mis en avant (clés du catalogue côté client).
+    #[serde(default)]
+    pub games: Vec<String>,
+    /// Profil privé : seuls les membres voient le profil du serveur.
+    #[serde(default)]
+    pub private_profile: bool,
+    /// Salon des messages système (arrivées de membres). `None` = désactivé.
+    #[serde(default)]
+    pub system_channel_id: Option<Snowflake>,
+    /// Niveau de notification par défaut : 0 = tous, 1 = @mentions seulement.
+    #[serde(default)]
+    pub default_message_notifications: u8,
+    /// Salon vocal AFK (déplacement après inactivité). `None` = désactivé.
+    #[serde(default)]
+    pub afk_channel_id: Option<Snowflake>,
+    /// Délai d'inactivité AFK en secondes.
+    #[serde(default)]
+    pub afk_timeout: i64,
+    /// Code d'invitation personnalisé permanent. `None` = aucun.
+    #[serde(default)]
+    pub vanity_code: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -159,6 +186,33 @@ pub struct UpdateGuild {
     /// Inscrire/retirer la guilde de l'annuaire de découverte.
     #[serde(default)]
     pub discoverable: Option<bool>,
+    #[serde(default)]
+    pub banner_color: Option<i64>,
+    #[serde(default)]
+    pub banner_id: Option<String>,
+    #[serde(default)]
+    pub games: Option<Vec<String>>,
+    #[serde(default)]
+    pub private_profile: Option<bool>,
+    /// Salon système : `Some("0")` = désactiver, `Some(id)` = définir, `None` = inchangé.
+    #[serde(default)]
+    pub system_channel_id: Option<Snowflake>,
+    #[serde(default)]
+    pub default_message_notifications: Option<u8>,
+    /// Salon AFK : `Some("0")` = désactiver, `Some(id)` = définir, `None` = inchangé.
+    #[serde(default)]
+    pub afk_channel_id: Option<Snowflake>,
+    #[serde(default)]
+    pub afk_timeout: Option<i64>,
+    /// Code vanity : `Some("")` = retirer, `Some(code)` = définir, `None` = inchangé.
+    #[serde(default)]
+    pub vanity_code: Option<String>,
+}
+
+/// Transfert de propriété d'une guilde (réservé au propriétaire actuel).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct TransferGuild {
+    pub new_owner_id: Snowflake,
 }
 
 /// Entrée de l'annuaire de découverte (guilde publique).
@@ -185,6 +239,40 @@ pub struct Channel {
     pub nsfw: bool,
     /// Slowmode en secondes (0 = désactivé).
     pub rate_limit_per_user: i32,
+    /// Vocal : débit audio en bits/s (8 000–512 000 ; bien au-delà des 96 kbps de Discord).
+    #[serde(default = "default_bitrate")]
+    pub bitrate: i32,
+    /// Vocal : limite d'utilisateurs (0 = illimité, max 99).
+    #[serde(default)]
+    pub user_limit: i32,
+    /// Vocal : région imposée (`None` = automatique).
+    #[serde(default)]
+    pub rtc_region: Option<String>,
+    /// Vocal : qualité vidéo (1 = auto, 2 = 720p).
+    #[serde(default = "default_video_quality_mode")]
+    pub video_quality_mode: u8,
+    /// Texte : durée avant masquage des fils inactifs (minutes : 60 / 1440 / 4320 / 10080).
+    #[serde(default = "default_auto_archive")]
+    pub default_auto_archive: i32,
+    /// Identifiant du dernier message du salon (pour le calcul des non-lus). `None` si vide.
+    #[serde(default)]
+    pub last_message_id: Option<Snowflake>,
+    /// Fil : archivé (masqué de la liste active).
+    #[serde(default)]
+    pub archived: bool,
+    /// Fil : verrouillé (seuls les modérateurs peuvent écrire / désarchiver).
+    #[serde(default)]
+    pub locked: bool,
+}
+
+fn default_bitrate() -> i32 {
+    64_000
+}
+fn default_video_quality_mode() -> u8 {
+    1
+}
+fn default_auto_archive() -> i32 {
+    4_320
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -216,6 +304,22 @@ pub struct UpdateChannel {
     pub rate_limit_per_user: Option<i32>,
     pub position: Option<i32>,
     pub parent_id: Option<Snowflake>,
+    /// Vocal : débit audio (bps). Borné côté serveur (8 000–512 000).
+    pub bitrate: Option<i32>,
+    /// Vocal : limite d'utilisateurs (0 = illimité, borné à 99).
+    pub user_limit: Option<i32>,
+    /// Vocal : région imposée. Chaîne vide ⇒ automatique (NULL).
+    pub rtc_region: Option<String>,
+    /// Vocal : qualité vidéo (1 = auto, 2 = 720p).
+    pub video_quality_mode: Option<u8>,
+    /// Texte : durée de masquage des fils inactifs (minutes).
+    pub default_auto_archive: Option<i32>,
+    /// Fil : archiver / désarchiver.
+    #[serde(default)]
+    pub archived: Option<bool>,
+    /// Fil : verrouiller / déverrouiller.
+    #[serde(default)]
+    pub locked: Option<bool>,
 }
 
 /// Élément du tableau de réordonnancement des salons.
@@ -271,6 +375,51 @@ pub struct Message {
     pub webhook_id: Option<Snowflake>,
     #[serde(default)]
     pub attachments: Vec<Attachment>,
+    /// Sondage porté par ce message, le cas échéant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub poll: Option<Poll>,
+    /// Sticker attaché à ce message, le cas échéant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sticker: Option<MessageSticker>,
+    /// Embeds riches (surtout webhooks). Vide ⇒ omis.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub embeds: Vec<MessageEmbed>,
+}
+
+/// Embed riche : carte structurée attachée à un message.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct MessageEmbed {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    /// Couleur de la barre latérale (0..=0xFFFFFF).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub fields: Vec<EmbedField>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub footer: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct EmbedField {
+    pub name: String,
+    pub value: String,
+    #[serde(default)]
+    pub inline: bool,
+}
+
+/// Référence légère du sticker porté par un message (l'asset se sert via `GET /stickers/:id`).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct MessageSticker {
+    pub id: Snowflake,
+    pub name: String,
+    pub format_type: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -285,6 +434,12 @@ pub struct CreateMessage {
     /// Pièces jointes (déjà téléversées) à attacher à ce message.
     #[serde(default)]
     pub attachments: Vec<Snowflake>,
+    /// Sticker de la guilde à attacher (un message peut être un sticker seul).
+    #[serde(default)]
+    pub sticker_id: Option<Snowflake>,
+    /// Embeds riches (gate `EMBED_LINKS`).
+    #[serde(default)]
+    pub embeds: Vec<MessageEmbed>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -306,6 +461,12 @@ pub struct Role {
     pub guild_id: Snowflake,
     pub name: String,
     pub color: u32,
+    /// Couleur secondaire (dégradé / vague). `None` ⇒ style uni.
+    #[serde(default)]
+    pub secondary_color: Option<u32>,
+    /// Style de couleur : `solid` | `gradient` | `neon` | `wave`.
+    #[serde(default = "default_color_style")]
+    pub color_style: String,
     pub hoist: bool,
     pub position: i32,
     pub permissions: String,
@@ -313,10 +474,18 @@ pub struct Role {
     pub managed: bool,
 }
 
+fn default_color_style() -> String {
+    "solid".into()
+}
+
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct CreateRole {
     pub name: Option<String>,
     pub color: Option<u32>,
+    #[serde(default)]
+    pub secondary_color: Option<u32>,
+    #[serde(default)]
+    pub color_style: Option<String>,
     pub hoist: Option<bool>,
     pub permissions: Option<String>,
     pub mentionable: Option<bool>,
@@ -326,9 +495,20 @@ pub struct CreateRole {
 pub struct UpdateRole {
     pub name: Option<String>,
     pub color: Option<u32>,
+    #[serde(default)]
+    pub secondary_color: Option<u32>,
+    #[serde(default)]
+    pub color_style: Option<String>,
     pub hoist: Option<bool>,
     pub permissions: Option<String>,
     pub mentionable: Option<bool>,
+}
+
+/// Réordonnancement des rôles : liste **complète** des id de rôles (hors `@everyone`),
+/// du plus haut (index 0) au plus bas. Le serveur recalcule les positions.
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct ReorderRoles {
+    pub ids: Vec<String>,
 }
 
 /// Surcharge de permissions au niveau d'un salon (`type` : 0 = rôle, 1 = membre).
@@ -359,6 +539,10 @@ pub struct Member {
     pub nick: Option<String>,
     pub roles: Vec<Snowflake>,
     pub joined_at: u64,
+    /// Code d'invitation utilisé pour rejoindre (méthode d'adhésion). `None` si inconnu
+    /// (propriétaire, ajout direct, découverte…).
+    #[serde(default)]
+    pub joined_via: Option<String>,
 }
 
 // ──────────────────────────────── Invitations ────────────────────────────────
@@ -384,6 +568,9 @@ pub struct CreateInvite {
     /// Durée de validité en secondes (0 = jamais).
     #[serde(default)]
     pub max_age: i64,
+    /// Code personnalisé optionnel (`[a-z0-9-]{2,32}`). Vide/absent ⇒ code aléatoire.
+    #[serde(default)]
+    pub code: Option<String>,
 }
 
 /// Aperçu d'une invitation (avant de rejoindre) : infos de guilde sans la rejoindre.
@@ -568,6 +755,65 @@ pub struct UpdateSound {
     pub emoji: Option<String>,
 }
 
+// ──────────────────────────── AutoMod ────────────────────────────
+
+fn default_mention_limit() -> i64 {
+    5
+}
+fn default_automod_action() -> String {
+    "block".into()
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AutomodRule {
+    pub id: Snowflake,
+    pub guild_id: Snowflake,
+    pub name: String,
+    /// `keyword` | `mention_spam`.
+    pub trigger_type: String,
+    pub keywords: Vec<String>,
+    pub mention_limit: i64,
+    /// `block` | `alert`.
+    pub action: String,
+    pub alert_channel_id: Option<Snowflake>,
+    pub exempt_roles: Vec<Snowflake>,
+    pub enabled: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct CreateAutomodRule {
+    pub name: String,
+    pub trigger_type: String,
+    #[serde(default)]
+    pub keywords: Vec<String>,
+    #[serde(default = "default_mention_limit")]
+    pub mention_limit: i64,
+    #[serde(default = "default_automod_action")]
+    pub action: String,
+    #[serde(default)]
+    pub alert_channel_id: Option<Snowflake>,
+    #[serde(default)]
+    pub exempt_roles: Vec<Snowflake>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+pub struct UpdateAutomodRule {
+    #[serde(default)]
+    pub name: Option<String>,
+    #[serde(default)]
+    pub keywords: Option<Vec<String>>,
+    #[serde(default)]
+    pub mention_limit: Option<i64>,
+    #[serde(default)]
+    pub action: Option<String>,
+    #[serde(default)]
+    pub alert_channel_id: Option<Snowflake>,
+    #[serde(default)]
+    pub exempt_roles: Option<Vec<Snowflake>>,
+    #[serde(default)]
+    pub enabled: Option<bool>,
+}
+
 // ──────────────────────────── Modération ────────────────────────────
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -603,6 +849,9 @@ pub struct AuditLogEntry {
     pub target_id: Option<Snowflake>,
     pub action_type: String,
     pub reason: Option<String>,
+    /// Détails optionnels (nom de l'entité, avant/après) en JSON libre.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub changes: Option<serde_json::Value>,
     pub created_at: u64,
 }
 
@@ -682,6 +931,7 @@ pub struct UpdateWebhook {
 /// Corps d'exécution d'un webhook (auth par jeton dans l'URL, pas de session).
 #[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct ExecuteWebhook {
+    #[serde(default)]
     pub content: String,
     /// Nom d'affichage de remplacement pour ce message.
     #[serde(default)]
@@ -689,6 +939,9 @@ pub struct ExecuteWebhook {
     /// Avatar de remplacement pour ce message.
     #[serde(default)]
     pub avatar_id: Option<String>,
+    /// Embeds riches (cas d'usage principal des webhooks : CI, monitoring).
+    #[serde(default)]
+    pub embeds: Vec<MessageEmbed>,
 }
 
 // ──────────────────────────── Événements programmés ────────────────────────────
@@ -796,8 +1049,21 @@ pub struct PresenceView {
 pub struct SetPresence {
     /// `online` | `idle` | `dnd` | `invisible`.
     pub status: String,
-    #[serde(default)]
-    pub custom_status: Option<String>,
+    /// Sémantique à 3 états : **champ absent** (`None`) = ne pas toucher au statut perso ;
+    /// `Some(None)` (null explicite) = effacer ; `Some(Some(s))` = définir. Évite qu'un simple
+    /// changement de statut (en/idle/dnd) efface le statut personnalisé existant.
+    #[serde(default, deserialize_with = "deserialize_optional_field")]
+    pub custom_status: Option<Option<String>>,
+}
+
+/// Désérialiseur pour un champ optionnel à 3 états (absent / null / valeur).
+fn deserialize_optional_field<'de, D>(de: D) -> Result<Option<Option<String>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    // Si la clé est présente, on désérialise un `Option<String>` (null → None) puis on l'enveloppe
+    // dans `Some(...)`. L'attribut `#[serde(default)]` fournit `None` quand la clé est absente.
+    Ok(Some(Option::<String>::deserialize(de)?))
 }
 
 // ──────────────────────────── Profil & réglages ────────────────────────────

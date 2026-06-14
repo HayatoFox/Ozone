@@ -197,6 +197,71 @@ pub async fn broadcast_presence(st: &AppState, uid: i64) {
     }
 }
 
+/// Diffuse le **profil public** (pseudo/avatar) mis à jour d'un utilisateur EN DIRECT à toutes
+/// les vues qui l'affichent : ses propres sessions, ses **amis**, ses **co-destinataires de MP**
+/// et toutes les **guildes partagées** (listes de membres, auteurs de messages…).
+pub async fn broadcast_user_update(st: &AppState, uid: i64) {
+    let Some(row) = sqlx::query("SELECT username, display_name, avatar_id FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await
+        .ok()
+        .flatten()
+    else {
+        return;
+    };
+    let payload = json!({
+        "id": uid.to_string(),
+        "username": row.get::<String, _>("username"),
+        "display_name": row.get::<Option<String>, _>("display_name"),
+        "avatar_id": row.get::<Option<String>, _>("avatar_id"),
+    });
+
+    // Destinataires « par utilisateur » (dédupliqués) : soi + amis (deux sens) + co-MP.
+    let mut users: std::collections::HashSet<i64> = std::collections::HashSet::new();
+    users.insert(uid);
+    if let Ok(rows) = sqlx::query(
+        "SELECT target_id AS other FROM relationships WHERE user_id = ? AND type = 'friend' \
+         UNION SELECT user_id AS other FROM relationships WHERE target_id = ? AND type = 'friend'",
+    )
+    .bind(uid)
+    .bind(uid)
+    .fetch_all(&st.pool)
+    .await
+    {
+        for r in rows {
+            users.insert(r.get::<i64, _>("other"));
+        }
+    }
+    if let Ok(rows) = sqlx::query(
+        "SELECT DISTINCT user_id FROM dm_recipients \
+         WHERE channel_id IN (SELECT channel_id FROM dm_recipients WHERE user_id = ?) AND user_id != ?",
+    )
+    .bind(uid)
+    .bind(uid)
+    .fetch_all(&st.pool)
+    .await
+    {
+        for r in rows {
+            users.insert(r.get::<i64, _>("user_id"));
+        }
+    }
+    for u in users {
+        st.publish(EventScope::User(u), "USER_UPDATE", payload.clone());
+    }
+
+    // Guildes partagées (couvre les listes de membres + auteurs de messages).
+    if let Ok(guilds) = sqlx::query("SELECT guild_id FROM guild_members WHERE user_id = ?")
+        .bind(uid)
+        .fetch_all(&st.pool)
+        .await
+    {
+        for g in guilds {
+            st.publish(EventScope::Guild(g.get::<i64, _>("guild_id")), "USER_UPDATE", payload.clone());
+        }
+    }
+}
+
 async fn send_frame<S>(tx: &mut S, frame: &GatewayFrame) -> Result<(), ()>
 where
     S: futures_util::Sink<Message> + Unpin,

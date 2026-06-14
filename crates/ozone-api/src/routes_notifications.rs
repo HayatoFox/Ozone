@@ -6,7 +6,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::AppState;
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -55,6 +55,12 @@ pub async fn ack_message(
     .bind(mid)
     .execute(&st.pool)
     .await?;
+    // Sync multi-sessions : les AUTRES sessions du même utilisateur effacent leur badge.
+    st.publish(
+        EventScope::User(uid),
+        "MESSAGE_ACK",
+        json!({ "channel_id": cid.to_string(), "last_read_id": mid.to_string() }),
+    );
     Ok(Json(read_state_of(&st, uid, cid).await?))
 }
 
@@ -118,6 +124,12 @@ pub async fn ack_guild(
         .execute(&st.pool)
         .await?;
     }
+    // Sync multi-sessions : la guilde entière passe lue sur les autres appareils.
+    st.publish(
+        EventScope::User(uid),
+        "GUILD_ACK",
+        json!({ "guild_id": gid.to_string() }),
+    );
     Ok(Json(json!({ "ok": true })))
 }
 

@@ -3,6 +3,8 @@
 
 use crate::crypto;
 use crate::error::{AppError, AppResult};
+use crate::extract::ClientIp;
+use crate::ratelimit;
 use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
@@ -37,8 +39,12 @@ pub async fn health(State(st): State<AppState>) -> Json<Value> {
 /// `POST /instance/gate` — vérifie le mot de passe d'instance → jeton de gate court.
 pub async fn gate(
     State(st): State<AppState>,
+    ClientIp(ip): ClientIp,
     Json(req): Json<GateRequest>,
 ) -> AppResult<Json<GateResponse>> {
+    st.rate
+        .check(ratelimit::GATE, &ip)
+        .map_err(AppError::rate_limited)?;
     let Some(hash) = st.instance.gate_hash.as_deref() else {
         return Err(AppError::bad_request(
             "cette instance n'exige pas de mot de passe d'instance",

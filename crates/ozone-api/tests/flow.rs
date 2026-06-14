@@ -67,7 +67,7 @@ async fn full_flow() {
                 .uri("/auth/register")
                 .header("content-type", "application/json")
                 .body(Body::from(
-                    json!({"username":"Alice","email":"alice@example.com","password":"motdepasse"})
+                    json!({"username":"Alice","email":"alice@example.com","password":"Sup3r-Ozone-Pw"})
                         .to_string(),
                 ))
                 .unwrap(),
@@ -245,7 +245,7 @@ async fn gated_instance_requires_password() {
         .clone()
         .oneshot(post_req(
             "/auth/register",
-            json!({"username":"eve","email":"eve@x.fr","password":"motdepasse"}),
+            json!({"username":"eve","email":"eve@x.fr","password":"Sup3r-Ozone-Pw"}),
         ))
         .await
         .unwrap();
@@ -274,7 +274,7 @@ async fn gated_instance_requires_password() {
         .clone()
         .oneshot(post_req(
             "/auth/register",
-            json!({"username":"Bob","email":"bob@x.fr","password":"motdepasse","gate_token": gt}),
+            json!({"username":"Bob","email":"bob@x.fr","password":"Sup3r-Ozone-Pw","gate_token": gt}),
         ))
         .await
         .unwrap();

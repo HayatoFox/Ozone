@@ -88,19 +88,23 @@ pub async fn join_discovery(
     .bind(now_ms())
     .execute(&st.pool)
     .await?;
+    // Rôle @everyone (id == guild_id) attribué dès l'arrivée.
+    sqlx::query("INSERT OR IGNORE INTO member_roles (guild_id, user_id, role_id) VALUES (?, ?, ?)")
+        .bind(gid)
+        .bind(me)
+        .bind(gid)
+        .execute(&st.pool)
+        .await?;
     if res.rows_affected() > 0 {
         st.publish(
             EventScope::Guild(gid),
             "GUILD_MEMBER_ADD",
             serde_json::json!({ "guild_id": gid.to_string(), "user_id": me.to_string() }),
         );
+        crate::routes_guild::announce_member_join(&st, gid, me).await;
     }
-    Ok(Json(Guild {
-        id: Snowflake::from_i64(row.get::<i64, _>("id")),
-        name: row.get("name"),
-        owner_id: Snowflake::from_i64(row.get::<i64, _>("owner_id")),
-        icon_id: row.get("icon_id"),
-        description: row.get("description"),
-        discoverable: true,
-    }))
+    let guild = crate::routes_chat::fetch_guild_full(&st, gid)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    Ok(Json(guild))
 }

@@ -67,6 +67,13 @@ impl Registry {
         e.custom_status = custom_status;
     }
 
+    /// Statut personnalisé actuellement mémorisé (pour le préserver lors d'un simple changement
+    /// de statut en ligne/idle/dnd). `None` si aucune entrée ou aucun statut perso.
+    pub fn current_custom(&self, uid: i64) -> Option<String> {
+        let m = self.inner.lock().unwrap();
+        m.get(&uid).and_then(|e| e.custom_status.clone())
+    }
+
     /// Statut **effectif** visible par autrui : `offline` si hors ligne ou invisible.
     pub fn effective(&self, uid: i64) -> (String, Option<String>) {
         let m = self.inner.lock().unwrap();

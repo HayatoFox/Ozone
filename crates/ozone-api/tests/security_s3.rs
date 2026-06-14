@@ -64,7 +64,7 @@ async fn register(app: &Router, u: &str, e: &str) -> String {
         rq(
             "POST",
             "/auth/register",
-            Some(json!({"username":u,"email":e,"password":"motdepasse"})),
+            Some(json!({"username":u,"email":e,"password":"Sup3r-Ozone-Pw"})),
             "",
         ),
     )
