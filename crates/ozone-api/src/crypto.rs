@@ -42,9 +42,10 @@ pub fn sha256_hex(s: &str) -> String {
     let mut h = Sha256::new();
     h.update(s.as_bytes());
     let out = h.finalize();
+    use std::fmt::Write as _;
     let mut hex = String::with_capacity(out.len() * 2);
     for byte in out {
-        hex.push_str(&format!("{byte:02x}"));
+        let _ = write!(hex, "{byte:02x}");
     }
     hex
 }

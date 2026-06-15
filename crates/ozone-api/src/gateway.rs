@@ -360,7 +360,6 @@ async fn build_ready(st: &AppState, uid: Snowflake, session_id: &str) -> serde_j
 /// (membre de la guilde, droit de voir le salon, destinataire du MP, ou utilisateur ciblé).
 pub async fn should_deliver(st: &AppState, user_id: i64, scope: &EventScope) -> bool {
     match scope {
-        EventScope::Global => true,
         EventScope::User(u) => *u == user_id,
         EventScope::Guild(g) => is_guild_member(st, *g, user_id).await,
         EventScope::Dm(c) => is_dm_recipient(st, *c, user_id).await,

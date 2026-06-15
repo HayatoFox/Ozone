@@ -20,8 +20,8 @@ Ozone/
 │   │   ├── migrations/        # schéma SQLite (sqlx)
 │   │   ├── src/               # config, crypto, db (bootstrap), routes_*, gateway, lib, main
 │   │   └── tests/flow.rs      # test d'intégration de bout en bout
-│   ├── ozone-core/            # CŒUR CLIENT partagé (registre d'instances, …) — en croissance
-│   └── ozone-ui/              # CLIENT natif (placeholder ; UI GPU à intégrer)
+│   └── ozone-sfu/             # SERVEUR : SFU vocal/vidéo (WebRTC)
+├── desktop/                   # CLIENT : React + TypeScript, empaqueté en .exe via Tauri
 ├── docs/                      # plan de conception complet
 ├── Dockerfile · docker-compose.yml · .env.example
 ```
@@ -88,7 +88,7 @@ docker compose --profile full up   # + Postgres/Redis/NATS/MinIO (futur full-sta
 ```
 
 ## Prochaines étapes (cf. [docs/09-roadmap.md](docs/09-roadmap.md))
-- Client `ozone-ui` : écran de **connexion à une instance** + liste salons + messages (UI GPU).
-- `ozone-core` : clients REST + Gateway, store normalisé, cache SQLite.
+- Client de référence : `desktop/` (React + TypeScript, empaqueté Tauri). Le client natif iced
+  d'origine (`ozone-ui` / `ozone-core`) a été retiré au profit de celui-ci.
 - Permissions par guilde (overrides), invitations, threads, etc.
 - Bascule full-stack (Postgres/Redis/NATS/S3) + SFU vocal.

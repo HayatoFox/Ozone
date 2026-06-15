@@ -1390,6 +1390,41 @@ Avant ce lot, la clé privée DM ne vivait qu'en `localStorage` ⇒ un autre app
 
 **Bilan** : la dette « mot de passe oublié » de §112 est close — récupération de compte **et** de MP via un code haute-entropie, sans que l'admin puisse lire ; rate-limité, erreurs sans oracle. Style de pseudo et lecteur vidéo sans surface d'attaque notable. **Aucune faille exploitable** introduite. Dettes restantes : E2EE des **pièces jointes** de MP, **empreinte de clé** anti-MITM.
 
+## §114 — Passe d'optimisation (dédup / code mort / bloat) — vérification adversariale
+
+Passe menée dans un **clone** (jamais le live), re-baselinée sur `309676b`, audit multi-agents (12 zones)
+avec **vérification adversariale de chaque trouvaille**. Posture : **changements à comportement strictement
+préservé** ⇒ surface d'attaque **inchangée**. Vérifié point par point :
+
+- **Retrait du client iced (`ozone-ui` + `ozone-core`, ~7,8 k lignes)** : code **client** uniquement ; rien
+  côté serveur n'en dépend (`desktop/src-tauri` est un workspace distinct, zéro référence). **Réduit** la
+  surface d'approvisionnement (l'arbre de dépendances iced/wgpu disparaît du `Cargo.lock`) — bénéfice net.
+- **Dédup d'authentification** : `reauth_password` rend exactement les mêmes 404/401 que les blocs inlinés
+  qu'il remplace (change_email/delete_account) ; `fetch_user_with_email` renvoie le même `User`. **Aucun
+  affaiblissement de la ré-authentification.**
+- **`require_guild_owner_id` (14 sites)** : conserve à l'identique le gate « 404 si guilde absente » ; les
+  sites en `match` (routage d'événements gateway/messages) **non touchés**. Aucun bypass de permission.
+- **`is_blocked` (relations)** : les deux contrôles de blocage (sens `target→me` et `me→target`) et leurs
+  messages `forbidden` sont préservés. Aucun contournement.
+- **`emit`→`publish`** : même `HubEvent`/même portée pub-sub ⇒ **aucune fuite d'événement** vers un
+  utilisateur non autorisé. `EventScope::Global` retiré n'était **jamais construit** (mort) ⇒ routage inchangé.
+- **`store_upload` / `image_content_type`** : même écriture fichier (id Snowflake numérique ⇒ pas de
+  traversée) et même liste blanche de `Content-Type` + `nosniff`/CSP. Défense en profondeur intacte.
+- **Écartés pour raison de sécurité/sémantique** : fusion `serve_emoji`→`serve_stored_image` (divergence
+  Cache-Control/404), fusion du re-wrap escrow (logique divergente), `perms` membership/recipient
+  (sémantique d'erreur DB différente). Voir `OPTIM-PLAN.md`.
+
+**Preuve** : suites `security*` (`security.rs`, `security_s3..s16`, `permissions.rs`, `relationships.rs`,
+`events.rs`) **toutes vertes** dans `cargo test --workspace` (**131** tests) + `tsc` + `vitest` (46). **Aucune
+régression d'auth / permission / routage.** **Bug pré-existant surfacé (hors optim)** : `cargo test -p ozone-core`
+ne compilait plus dans le live (DTO `priv_wrapped`/`code` non répercutés aux tests) — le retrait du crate rend
+le workspace vert ; à noter pour le live si ces crates avaient été conservées.
+
+**Vague optionnelle (sur la branche `optim-dedup-cleanup`)** — deux dédups supplémentaires, **chacune avec un test dédié** :
+- `read_one_upload` (boucle de lecture multipart « 1er champ fichier » factorisée ×5, emojis/stickers/sons) : extraction pure, les validations par endpoint (taille/format) restent par site. Test `expressions::emoji_image_upload_reads_first_file` (fichier valide ⇒ `image_id` ; aucun champ fichier ⇒ 400).
+- `require_role_below` (garde de hiérarchie de rôle factorisée ×4 dans `routes_roles`) : **code de privilège** — extraction 1:1 à message d'erreur préservé. Test `permissions::role_hierarchy_guard_blocks_equal_or_higher` (gestionnaire de rôles bloqué sur un rôle ≥ au sien ⇒ 403 ; propriétaire non contraint ⇒ 200).
+- Différées faute d'infra de test sûre : factorisation du retrait de pistes relayées **SFU** (pas de banc d'essai WebRTC, chemin vocal critique) et câblage du composant `ui/Switch` (refonte purement visuelle, pas de tests de composants ; à valider par QA visuelle).
+
 ---
 **Dettes/risques identifiés à traiter (client web) :**
 - **R11 — Embeds de liens** : *embeds média directs* **implémentés en opt-in** (§75, OFF par défaut, consentement éclairé). L'**unfurling OG** (aperçus titre/description de pages) reste différé : nécessite une **récupération HTTPS côté serveur** (incompatible zéro-`ring` sans pile TLS pure-Rust) + garde **anti-SSRF**.

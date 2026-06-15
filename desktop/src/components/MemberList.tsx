@@ -13,6 +13,11 @@ import { displayName } from "../lib/format";
 
 const ONLINE = new Set(["online", "idle", "dnd"]);
 
+// Style du nom d'un membre : style personnel prioritaire, sinon couleur/effet du rôle le plus haut.
+function memberNameStyle(roles: Role[], m: Member): UserNameStyle | undefined {
+  return userNameStyle(m.user.name_style) ?? roleNameStyle(memberTopColorRole(roles, m)) ?? undefined;
+}
+
 export function MemberList({ guildId }: { guildId: string }) {
   const rawMembers = useStore((s) => s.membersByGuild[guildId]);
   const members = rawMembers ?? [];
@@ -62,7 +67,7 @@ export function MemberList({ guildId }: { guildId: string }) {
               id={m.user.id}
               status={presences[m.user.id] ?? "online"}
               avatarId={m.user.avatar_id}
-              nameStyle={userNameStyle(m.user.name_style) ?? roleNameStyle(memberTopColorRole(roles, m)) ?? undefined}
+              nameStyle={memberNameStyle(roles, m)}
             />
           ))}
         </div>
@@ -77,7 +82,7 @@ export function MemberList({ guildId }: { guildId: string }) {
           id={m.user.id}
           status="offline"
           avatarId={m.user.avatar_id}
-          nameStyle={userNameStyle(m.user.name_style) ?? roleNameStyle(memberTopColorRole(roles, m)) ?? undefined}
+          nameStyle={memberNameStyle(roles, m)}
           dim
         />
       ))}

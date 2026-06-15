@@ -1,5 +1,11 @@
 # 11 — Client natif (décision d'architecture)
 
+> ⚠️ **Historique / obsolète.** La décision ci-dessous (client natif **Iced** + `ozone-core`) a été
+> **abandonnée**. Le client de référence est désormais `desktop/` (**React + TypeScript**, empaqueté
+> **Tauri** en `.exe`), qui porte toutes les fonctionnalités récentes (E2EE, vocal/SFU, lecteur vidéo,
+> styles de pseudo, etc.). Les crates `ozone-ui` et `ozone-core` ont été retirées du dépôt. Ce
+> document est conservé pour mémoire des arbitrages d'origine.
+
 Objectif : un client **natif** (pas Electron), **performant**, **modulaire**, et capable d'**effets
 de décoration / thèmes** soignés à terme. Cf. [00-vision](00-vision-et-perimetre.md), [02-stack](02-stack-technique.md).
 

@@ -84,9 +84,7 @@ async fn owner_and_positions(
     actor: i64,
     target: i64,
 ) -> AppResult<(i64, i32, i32)> {
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let actor_pos = pg::highest_role_position(&st.pool, gid, owner, actor).await?;
     let target_pos = pg::highest_role_position(&st.pool, gid, owner, target).await?;
     Ok((owner, actor_pos, target_pos))

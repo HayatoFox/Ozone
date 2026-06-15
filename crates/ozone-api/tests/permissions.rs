@@ -246,3 +246,124 @@ async fn user_id(app: &Router, token: &str) -> String {
     .await;
     me["id"].as_str().unwrap().to_string()
 }
+
+// Garde de hiérarchie de rôle (helper `require_role_below`) : un gestionnaire de rôles ne peut
+// pas agir sur un rôle situé à une position >= à son propre rôle le plus haut ; le propriétaire
+// n'est jamais contraint.
+#[tokio::test]
+async fn role_hierarchy_guard_blocks_equal_or_higher() {
+    let app = open_app().await;
+    let alice = register(&app, "alice", "alice@x.fr").await;
+    let guild = body_json(
+        app.clone()
+            .oneshot(req("POST", "/guilds", Some(json!({"name":"G"})), Some(&alice)))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let gid = guild["id"].as_str().unwrap().to_string();
+
+    // "staff" créé en premier => position 1, doté de MANAGE_ROLES.
+    let manage = perms::MANAGE_ROLES.to_string();
+    let staff = body_json(
+        app.clone()
+            .oneshot(req(
+                "POST",
+                &format!("/guilds/{gid}/roles"),
+                Some(json!({"name":"staff","permissions": manage})),
+                Some(&alice),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let staff_id = staff["id"].as_str().unwrap().to_string();
+
+    // "boss" créé ensuite => position 2 (au-dessus de staff).
+    let boss = body_json(
+        app.clone()
+            .oneshot(req(
+                "POST",
+                &format!("/guilds/{gid}/roles"),
+                Some(json!({"name":"boss"})),
+                Some(&alice),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let boss_id = boss["id"].as_str().unwrap().to_string();
+
+    // Bob rejoint via invitation et reçoit "staff".
+    let invite = body_json(
+        app.clone()
+            .oneshot(req(
+                "POST",
+                &format!("/guilds/{gid}/invites"),
+                Some(json!({})),
+                Some(&alice),
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let code = invite["code"].as_str().unwrap().to_string();
+    let bob = register(&app, "bob", "bob@x.fr").await;
+    assert_eq!(
+        app.clone()
+            .oneshot(req("POST", &format!("/invites/{code}"), Some(json!({})), Some(&bob)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+        "join"
+    );
+    let bob_id = user_id(&app, &bob).await;
+    assert!(
+        app.clone()
+            .oneshot(req(
+                "PUT",
+                &format!("/guilds/{gid}/members/{bob_id}/roles/{staff_id}"),
+                None,
+                Some(&alice),
+            ))
+            .await
+            .unwrap()
+            .status()
+            .is_success(),
+        "attribution de staff à bob"
+    );
+
+    // Bob a MANAGE_ROLES (via staff, position 1) mais NE PEUT PAS supprimer "boss" (position 2 > 1).
+    assert_eq!(
+        app.clone()
+            .oneshot(req("DELETE", &format!("/guilds/{gid}/roles/{boss_id}"), None, Some(&bob)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN,
+        "rôle au-dessus => 403 (require_role_below)"
+    );
+
+    // Ni "staff" lui-même (position égale à son rôle le plus haut).
+    assert_eq!(
+        app.clone()
+            .oneshot(req("DELETE", &format!("/guilds/{gid}/roles/{staff_id}"), None, Some(&bob)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::FORBIDDEN,
+        "rôle égal => 403"
+    );
+
+    // Le propriétaire (alice) n'est pas contraint par la hiérarchie.
+    assert_eq!(
+        app.clone()
+            .oneshot(req("DELETE", &format!("/guilds/{gid}/roles/{boss_id}"), None, Some(&alice)))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::OK,
+        "le propriétaire supprime boss"
+    );
+}

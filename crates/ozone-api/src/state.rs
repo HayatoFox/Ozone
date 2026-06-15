@@ -50,8 +50,6 @@ pub struct InstanceRuntime {
 /// Portée d'un événement = qui a le droit de le recevoir (routage pub/sub, pas de paywall).
 #[derive(Clone, Debug)]
 pub enum EventScope {
-    /// Tout le monde (rare).
-    Global,
     /// Les membres d'une guilde.
     Guild(i64),
     /// Les membres qui peuvent voir ce salon de guilde.

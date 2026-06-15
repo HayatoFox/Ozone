@@ -43,6 +43,18 @@ async fn upsert_relationship(
 /// - Si relation existante == `friend` → no-op.
 /// - Si relation existante == `incoming` → acceptation mutuelle (`friend` / `friend`).
 /// - Sinon → envoi de la demande (`outgoing` / `incoming`).
+/// `a` a-t-il bloqué `b` ? (relation `blocked` orientée a→b).
+async fn is_blocked(st: &AppState, a: i64, b: i64) -> AppResult<bool> {
+    Ok(sqlx::query(
+        "SELECT 1 FROM relationships WHERE user_id = ? AND target_id = ? AND type = 'blocked'",
+    )
+    .bind(a)
+    .bind(b)
+    .fetch_optional(&st.pool)
+    .await?
+    .is_some())
+}
+
 async fn friend_request(st: &AppState, me: i64, target: i64) -> AppResult<serde_json::Value> {
     // Durcissement : pas d'auto-relation, et la cible doit exister
     // (couvre l'accès par identifiant, non validé par nom d'utilisateur).
@@ -59,28 +71,12 @@ async fn friend_request(st: &AppState, me: i64, target: i64) -> AppResult<serde_
     }
 
     // Vérifie que `target` n'a pas bloqué `me`.
-    let blocked_by_target = sqlx::query(
-        "SELECT 1 FROM relationships WHERE user_id = ? AND target_id = ? AND type = 'blocked'",
-    )
-    .bind(target)
-    .bind(me)
-    .fetch_optional(&st.pool)
-    .await?
-    .is_some();
-    if blocked_by_target {
+    if is_blocked(st, target, me).await? {
         return Err(AppError::forbidden("cet utilisateur vous a bloqué"));
     }
 
     // Vérifie que `me` n'a pas bloqué `target`.
-    let i_blocked = sqlx::query(
-        "SELECT 1 FROM relationships WHERE user_id = ? AND target_id = ? AND type = 'blocked'",
-    )
-    .bind(me)
-    .bind(target)
-    .fetch_optional(&st.pool)
-    .await?
-    .is_some();
-    if i_blocked {
+    if is_blocked(st, me, target).await? {
         return Err(AppError::forbidden("vous avez bloqué cet utilisateur"));
     }
 

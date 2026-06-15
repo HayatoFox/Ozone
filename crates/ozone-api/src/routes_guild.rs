@@ -109,9 +109,7 @@ pub async fn kick_member(
     let gid = parse_i64(&gid)?;
     let target = parse_i64(&target)?;
     pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::KICK_MEMBERS).await?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     if target == owner {
         return Err(AppError::forbidden("impossible d'expulser le propriétaire"));
     }
@@ -160,9 +158,7 @@ pub async fn leave_guild(
 ) -> AppResult<Json<serde_json::Value>> {
     let gid = parse_i64(&gid)?;
     let me = user.id.as_i64();
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     if owner == me {
         return Err(AppError::forbidden(
             "le propriétaire ne peut pas quitter sa guilde (supprimez-la d'abord)",
@@ -201,9 +197,7 @@ pub async fn transfer_guild(
 ) -> AppResult<Json<serde_json::Value>> {
     let gid = parse_i64(&gid)?;
     let me = user.id.as_i64();
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     if owner != me {
         return Err(AppError::forbidden(
             "seul le propriétaire peut transférer la guilde",

@@ -366,7 +366,6 @@ export const api = {
   // Guildes
   listGuilds: () => get<Guild[]>("/guilds"),
   createGuild: (req: CreateGuild) => post<Guild>("/guilds", req),
-  getGuild: (id: Snowflake) => get<Guild>(`/guilds/${id}`),
   updateGuild: (id: Snowflake, req: UpdateGuild) => patch<Guild>(`/guilds/${id}`, req),
   // Transfert de propriété (réservé au propriétaire actuel ; la cible doit être membre).
   transferGuild: (id: Snowflake, newOwnerId: Snowflake) =>
@@ -381,13 +380,10 @@ export const api = {
   listChannels: (guildId: Snowflake) => get<Channel[]>(`/guilds/${guildId}/channels`),
   createChannel: (guildId: Snowflake, req: CreateChannel) =>
     post<Channel>(`/guilds/${guildId}/channels`, req),
-  getChannel: (id: Snowflake) => get<Channel>(`/channels/${id}`),
   createThread: (channelId: Snowflake, name: string) =>
     post<Channel>(`/channels/${channelId}/threads`, { name }),
   listThreads: (channelId: Snowflake) => get<Channel[]>(`/channels/${channelId}/threads`),
   updateChannel: (id: Snowflake, req: UpdateChannel) => patch<Channel>(`/channels/${id}`, req),
-  joinThread: (channelId: Snowflake) => put<void>(`/channels/${channelId}/thread-members/@me`),
-  leaveThread: (channelId: Snowflake) => del<void>(`/channels/${channelId}/thread-members/@me`),
   deleteChannel: (id: Snowflake) => del<void>(`/channels/${id}`),
   // Réordonnancement / déplacement entre catégories. `parent_id` = "0" ⇒ racine (hors catégorie).
   reorderChannels: (
@@ -609,8 +605,6 @@ export const api = {
   // Recherche
   searchChannel: (channelId: Snowflake, q: string) =>
     get<SearchResponse>(`/channels/${channelId}/messages/search`, { q }),
-  searchGuild: (guildId: Snowflake, q: string) =>
-    get<SearchResponse>(`/guilds/${guildId}/messages/search`, { q }),
 
   // MP / groupes
   listDMs: () => get<DMChannel[]>("/users/@me/channels"),

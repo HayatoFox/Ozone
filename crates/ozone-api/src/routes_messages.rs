@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::{AppState, EventScope, HubEvent};
+use crate::state::{AppState, EventScope};
 use crate::util::{parse_i64, parse_name_style};
 use axum::extract::{Path, Query, State};
 use axum::Json;
@@ -40,11 +40,16 @@ async fn emit(st: &AppState, channel_id: i64, t: &str, d: serde_json::Value) {
         },
         _ => EventScope::Dm(channel_id),
     };
-    let _ = st.hub.send(HubEvent {
-        t: t.to_string(),
-        d,
-        scope,
-    });
+    st.publish(scope, t, d);
+}
+
+/// Liste `1,2,3` pour une clause SQL `IN (...)` à partir d'identifiants i64 (purement
+/// numériques ⇒ sûrs à interpoler). L'appelant garde son propre garde `is_empty()`.
+fn in_list(ids: &[i64]) -> String {
+    ids.iter()
+        .map(|i| i.to_string())
+        .collect::<Vec<_>>()
+        .join(",")
 }
 
 fn row_to_message_basic(r: SqliteRow) -> Message {
@@ -175,13 +180,9 @@ async fn fetch_referenced(st: &AppState, cid: i64, mid: i64) -> AppResult<Option
 }
 
 async fn fetch_message_in_channel(st: &AppState, cid: i64, mid: i64) -> AppResult<Message> {
-    let row = sqlx::query(&format!("{MSG_SELECT} WHERE m.id = ? AND m.channel_id = ?"))
-        .bind(mid)
-        .bind(cid)
-        .fetch_optional(&st.pool)
+    fetch_referenced(st, cid, mid)
         .await?
-        .ok_or_else(|| AppError::not_found("message introuvable"))?;
-    Ok(row_to_message_basic(row))
+        .ok_or_else(|| AppError::not_found("message introuvable"))
 }
 
 /// Charge les agrégats de réactions pour un ensemble de messages.
@@ -194,11 +195,7 @@ async fn load_reactions(
     if ids.is_empty() {
         return Ok(map);
     }
-    let list = ids
-        .iter()
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
+    let list = in_list(ids);
     let sql = format!(
         "SELECT message_id, emoji, COUNT(*) AS count, MAX(CASE WHEN user_id = ? THEN 1 ELSE 0 END) AS me \
          FROM reactions WHERE message_id IN ({list}) GROUP BY message_id, emoji ORDER BY MIN(created_at)"
@@ -222,11 +219,7 @@ async fn load_attachments(st: &AppState, ids: &[i64]) -> AppResult<HashMap<i64, 
     if ids.is_empty() {
         return Ok(map);
     }
-    let list = ids
-        .iter()
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
+    let list = in_list(ids);
     let sql = format!(
         "SELECT id, message_id, filename, content_type, size FROM attachments \
          WHERE message_id IN ({list}) ORDER BY id"
@@ -252,11 +245,7 @@ async fn load_poll_ids(st: &AppState, ids: &[i64]) -> AppResult<Vec<i64>> {
     if ids.is_empty() {
         return Ok(Vec::new());
     }
-    let list = ids
-        .iter()
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
+    let list = in_list(ids);
     let sql = format!("SELECT message_id FROM polls WHERE message_id IN ({list})");
     let rows = sqlx::query(&sql).fetch_all(&st.pool).await?;
     Ok(rows.into_iter().map(|r| r.get::<i64, _>("message_id")).collect())
@@ -1230,11 +1219,7 @@ async fn run_search(
         }
     };
     let fts = q.q.as_deref().and_then(fts_query);
-    let id_list = channel_ids
-        .iter()
-        .map(|i| i.to_string())
-        .collect::<Vec<_>>()
-        .join(",");
+    let id_list = in_list(channel_ids);
 
     // Filtres entiers : validés en i64 (donc sûrs à interpoler). Le texte FTS est **lié**.
     let mut filters = format!(" WHERE m.channel_id IN ({id_list})");
@@ -1308,9 +1293,7 @@ pub async fn search_guild(
 ) -> AppResult<Json<SearchResponse>> {
     let gid = parse_i64(&gid)?;
     pg::require_guild_member(&st.pool, gid, user.id.as_i64()).await?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let mut channels = viewable_channel_ids(&st, gid, owner, user.id.as_i64()).await?;
     // Restriction facultative à un salon (qui doit être dans l'ensemble autorisé).
     if let Some(c) = &q.channel_id {
