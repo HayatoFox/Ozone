@@ -93,6 +93,9 @@ pub fn build_app(state: AppState) -> Router {
             "/users/@me/settings",
             get(routes_users::get_settings).put(routes_users::put_settings),
         )
+        // Clé publique de chiffrement DM (E2EE) : dépôt de la sienne, lecture de celle d'autrui.
+        .route("/users/@me/keys", put(routes_users::put_public_key))
+        .route("/users/:user_id/keys", get(routes_users::get_public_key))
         .route("/users/@me/presence", put(routes_presence::set_presence))
         .route("/users/@me/password", patch(routes_auth::change_password))
         .route("/users/@me/email", patch(routes_auth::change_email))
@@ -181,8 +184,10 @@ pub fn build_app(state: AppState) -> Router {
         // Pièces jointes
         .route(
             "/channels/:channel_id/attachments",
+            // 1 Go + marge pour l'enrobage multipart (le handler streame vers le disque et borne
+            // la taille réelle à MAX_ATTACHMENT_SIZE au fil de la lecture).
             post(routes_attachments::upload_attachment)
-                .layer(DefaultBodyLimit::max(26 * 1024 * 1024)),
+                .layer(DefaultBodyLimit::max(1024 * 1024 * 1024 + 1024 * 1024)),
         )
         .route(
             "/attachments/:id/:filename",

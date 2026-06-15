@@ -74,6 +74,11 @@ export interface User {
   email?: string | null;
 }
 
+/** Clé publique de chiffrement DM (E2EE) d'un utilisateur — `null` s'il n'en a pas publié. */
+export interface PublicKey {
+  public_key: string | null;
+}
+
 export interface Guild {
   id: Snowflake;
   name: string;
@@ -274,6 +279,8 @@ export interface Message {
   poll?: Poll | null;
   sticker?: MessageSticker | null;
   embeds?: MessageEmbed[];
+  /** Texte chiffré E2EE (MP 1:1). Présent ⇒ `content` est vide ; à déchiffrer côté client. */
+  cipher?: string | null;
 }
 
 export interface CreateMessage {
@@ -282,10 +289,14 @@ export interface CreateMessage {
   reply_to?: Snowflake | null;
   attachments?: Snowflake[];
   sticker_id?: Snowflake | null;
+  /** Charge chiffrée E2EE (MP 1:1). Présent ⇒ `content` ignoré côté serveur. */
+  cipher?: string | null;
 }
 
 export interface EditMessage {
   content: string;
+  /** Nouvelle charge chiffrée E2EE (MP 1:1). Présent ⇒ `content` ignoré côté serveur. */
+  cipher?: string | null;
 }
 
 // ──────────────────────────── Rôles & permissions ────────────────────────────

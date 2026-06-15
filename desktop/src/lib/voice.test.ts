@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { tuneOpus } from "./voice";
 
-const OPUS_PARAMS = "minptime=10;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;maxaveragebitrate=64000;maxplaybackrate=48000";
+const OPUS_PARAMS = "minptime=10;ptime=10;useinbandfec=1;usedtx=0;stereo=0;sprop-stereo=0;maxaveragebitrate=96000;maxplaybackrate=48000";
 
 describe("tuneOpus", () => {
   it("remplace une ligne fmtp Opus existante par les paramètres voix", () => {
@@ -13,9 +13,9 @@ describe("tuneOpus", () => {
     ].join("\r\n");
     const out = tuneOpus(sdp);
     expect(out).toContain(`a=fmtp:111 ${OPUS_PARAMS}`);
-    // FEC, DTX et mono explicitement présents.
+    // FEC activé, DTX désactivé, mono explicitement présents.
     expect(out).toContain("useinbandfec=1");
-    expect(out).toContain("usedtx=1");
+    expect(out).toContain("usedtx=0");
     expect(out).toContain("stereo=0");
     // Ne touche pas aux autres codecs.
     expect(out).toContain("a=rtpmap:0 PCMU/8000");

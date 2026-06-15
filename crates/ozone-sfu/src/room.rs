@@ -20,10 +20,50 @@ use webrtc::peer_connection::sdp::session_description::RTCSessionDescription;
 use webrtc::peer_connection::peer_connection_state::RTCPeerConnectionState;
 use webrtc::peer_connection::signaling_state::RTCSignalingState;
 use webrtc::peer_connection::RTCPeerConnection;
+use webrtc::rtcp::payload_feedbacks::full_intra_request::FullIntraRequest;
+use webrtc::rtcp::payload_feedbacks::picture_loss_indication::PictureLossIndication;
 use webrtc::rtp_transceiver::rtp_sender::RTCRtpSender;
 use webrtc::track::track_local::track_local_static_rtp::TrackLocalStaticRTP;
 use webrtc::track::track_local::{TrackLocal, TrackLocalWriter};
 use webrtc::track::track_remote::TrackRemote;
+
+/// Demande une **keyframe** (PLI) au publieur d'une piste vidéo identifiée par `ssrc`. Sans cela,
+/// une vidéo dont la keyframe est perdue (perte réseau) OU un nouvel abonné restent FIGÉS jusqu'à
+/// la prochaine keyframe spontanée (parfois jamais). On force donc le publieur à en émettre une.
+async fn request_keyframe(pc: &Arc<RTCPeerConnection>, ssrc: u32) {
+    let pli = PictureLossIndication {
+        sender_ssrc: 0,
+        media_ssrc: ssrc,
+    };
+    let _ = pc.write_rtcp(&[Box::new(pli)]).await;
+}
+
+/// Relaie en continu les demandes de keyframe (PLI/FIR) d'un ABONNÉ vers le PUBLIEUR de la piste.
+/// Quand le décodeur d'un spectateur perd le fil (paquets manquants), il émet un PLI ; le SFU le
+/// transmet au publieur qui régénère une keyframe → la vidéo se « répare » au lieu de figer.
+fn spawn_keyframe_forwarder(
+    sender: Arc<RTCRtpSender>,
+    publisher_pc: Arc<RTCPeerConnection>,
+    ssrc: u32,
+) {
+    tokio::spawn(async move {
+        loop {
+            match sender.read_rtcp().await {
+                Ok((packets, _)) => {
+                    let wants_kf = packets.iter().any(|p| {
+                        let a = p.as_any();
+                        a.downcast_ref::<PictureLossIndication>().is_some()
+                            || a.downcast_ref::<FullIntraRequest>().is_some()
+                    });
+                    if wants_kf {
+                        request_keyframe(&publisher_pc, ssrc).await;
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
 
 /// Filtre la nature de piste demandée par le client par **liste blanche** : seules trois valeurs
 /// connues sont admises (sinon repli par défaut selon le média). Garantit qu'aucune chaîne
@@ -60,6 +100,9 @@ struct Peer {
     pc: Arc<RTCPeerConnection>,
     published: Mutex<Vec<Arc<TrackLocalStaticRTP>>>,
     relayed: Mutex<HashMap<String, Arc<RTCRtpSender>>>,
+    // SSRC distant des pistes VIDÉO publiées par ce pair (local_track_id → ssrc), pour adresser
+    // les demandes de keyframe (PLI) au bon flux.
+    pub_video_ssrc: Mutex<HashMap<String, u32>>,
     cmd_tx: mpsc::UnboundedSender<PeerCmd>,
     // « Pierres tombales » : `local_track_id` (id navigateur) dont l'`unpublish` est arrivé AVANT que
     // la piste correspondante ne soit captée par `on_track`. Sans cela, une activation/désactivation
@@ -145,12 +188,19 @@ impl Sfu {
             let rooms = self.rooms.lock().await;
             if let Some(room) = rooms.get(room_id) {
                 for other in room.peers.values() {
+                    let vssrc = other.pub_video_ssrc.lock().await;
                     for t in other.published.lock().await.iter() {
+                        let tid = TrackLocal::id(t.as_ref()).to_string();
                         if let Ok(sender) = pc
                             .add_track(t.clone() as Arc<dyn TrackLocal + Send + Sync>)
                             .await
                         {
-                            seeded_relayed.insert(TrackLocal::id(t.as_ref()).to_string(), sender);
+                            // Vidéo : route les PLI de ce nouvel abonné vers le publieur → il reçoit
+                            // une keyframe dès sa connexion (sinon tuile noire/figée à l'arrivée).
+                            if let Some(&ssrc) = vssrc.get(&tid) {
+                                spawn_keyframe_forwarder(sender.clone(), other.pc.clone(), ssrc);
+                            }
+                            seeded_relayed.insert(tid, sender);
                         }
                     }
                 }
@@ -182,7 +232,10 @@ impl Sfu {
                         format!("{uid_tag}.{kind}.{}", track.id()),
                         format!("{uid_tag}.{kind}"),
                     ));
-                    sfu.publish_track(&room_key, &peer_key, local.clone()).await;
+                    // SSRC du flux vidéo entrant : sert à router les demandes de keyframe (PLI).
+                    let video_ssrc = if is_video { Some(track.ssrc()) } else { None };
+                    sfu.publish_track(&room_key, &peer_key, local.clone(), video_ssrc)
+                        .await;
                     tokio::spawn(async move {
                         while let Ok((pkt, _)) = track.read_rtp().await {
                             if local.write_rtp(&pkt).await.is_err() {
@@ -236,6 +289,7 @@ impl Sfu {
                     published: Mutex::new(Vec::new()),
                     // Pistes reçues au join : déjà ajoutées à la PC, indexées pour pouvoir les retirer.
                     relayed: Mutex::new(seeded_relayed),
+                    pub_video_ssrc: Mutex::new(HashMap::new()),
                     cmd_tx,
                     tombstones: Mutex::new(HashSet::new()),
                 }),
@@ -266,7 +320,14 @@ impl Sfu {
     }
 
     /// Enregistre une piste publiée par `owner` et l'ajoute aux PC des autres pairs (+ renégociation).
-    async fn publish_track(&self, room_id: &str, owner: &str, track: Arc<TrackLocalStaticRTP>) {
+    /// `video_ssrc` : présent pour une piste vidéo (sert au routage des demandes de keyframe).
+    async fn publish_track(
+        &self,
+        room_id: &str,
+        owner: &str,
+        track: Arc<TrackLocalStaticRTP>,
+        video_ssrc: Option<u32>,
+    ) {
         let rooms = self.rooms.lock().await;
         let Some(room) = rooms.get(room_id) else {
             return;
@@ -283,8 +344,12 @@ impl Sfu {
                 return;
             }
         }
+        let owner_pc = room.peers.get(owner).map(|p| p.pc.clone());
         if let Some(p) = room.peers.get(owner) {
             p.published.lock().await.push(track.clone());
+            if let Some(ssrc) = video_ssrc {
+                p.pub_video_ssrc.lock().await.insert(track_id.clone(), ssrc);
+            }
         }
         for (id, other) in room.peers.iter() {
             if id != owner {
@@ -293,6 +358,11 @@ impl Sfu {
                     .add_track(track.clone() as Arc<dyn TrackLocal + Send + Sync>)
                     .await
                 {
+                    // Vidéo : relaie les demandes de keyframe de cet abonné vers le publieur
+                    // (récupération de freeze + premier rendu d'un nouvel abonné).
+                    if let (Some(ssrc), Some(pub_pc)) = (video_ssrc, owner_pc.clone()) {
+                        spawn_keyframe_forwarder(sender.clone(), pub_pc, ssrc);
+                    }
                     other.relayed.lock().await.insert(track_id.clone(), sender);
                     let _ = other.cmd_tx.send(PeerCmd::Renegotiate);
                 }
@@ -322,6 +392,11 @@ impl Sfu {
                     true
                 }
             });
+            // Oublie les SSRC vidéo des pistes retirées (plus de keyframe à router pour elles).
+            let mut vssrc = p.pub_video_ssrc.lock().await;
+            for tid in &to_remove {
+                vssrc.remove(tid);
+            }
         }
         if to_remove.is_empty() {
             // La piste n'est pas (encore) publiée : l'`unpublish` a devancé le `on_track`

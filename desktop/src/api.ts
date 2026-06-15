@@ -47,6 +47,7 @@ import type {
   PermissionOverwrite,
   Poll,
   PresenceView,
+  PublicKey,
   ReadState,
   RegisterRequest,
   SetNotificationSetting,
@@ -85,11 +86,14 @@ const BASE = (): string => apiBase();
 // ───────────────────────────── État du token ─────────────────────────────
 
 let accessToken: string | null = null;
+// Échéance approximative du jeton d'accès (epoch ms) — sert à rafraîchir AVANT un long upload.
+let accessTokenExpiry = 0;
 
 const TOKEN_KEY = "ozone.tokens";
 
 export function setTokens(tokens: TokenPair | null): void {
   accessToken = tokens?.access_token ?? null;
+  accessTokenExpiry = tokens?.expires_in ? Date.now() + tokens.expires_in * 1000 : 0;
   if (tokens) localStorage.setItem(TOKEN_KEY, JSON.stringify(tokens));
   else localStorage.removeItem(TOKEN_KEY);
   scheduleProactiveRefresh(tokens);
@@ -101,10 +105,19 @@ export function loadTokens(): TokenPair | null {
   try {
     const t = JSON.parse(raw) as TokenPair;
     accessToken = t.access_token;
+    accessTokenExpiry = t.expires_in ? Date.now() + t.expires_in * 1000 : 0;
     scheduleProactiveRefresh(t); // amorce le renouvellement dès le chargement de page
     return t;
   } catch {
     return null;
+  }
+}
+
+// Rafraîchit le jeton s'il expire bientôt (< 2 min) — appelé avant un upload potentiellement long
+// pour qu'il ne meure pas en plein milieu (impossible de rejouer un upload de 1 Go sur un 401).
+export async function ensureFreshToken(): Promise<void> {
+  if (accessToken && accessTokenExpiry && Date.now() > accessTokenExpiry - 120_000) {
+    await refreshTokens();
   }
 }
 
@@ -427,6 +440,10 @@ export const api = {
   ) => get<Message[]>(`/channels/${channelId}/messages`, opts),
   sendMessage: (channelId: Snowflake, req: CreateMessage) =>
     post<Message>(`/channels/${channelId}/messages`, req),
+  // Clés de chiffrement DM (E2EE) : publier la sienne, lire celle d'autrui.
+  putPublicKey: (publicKey: string) =>
+    put<PublicKey>(`/users/@me/keys`, { public_key: publicKey }),
+  getPublicKey: (userId: Snowflake) => get<PublicKey>(`/users/${userId}/keys`),
   editMessage: (channelId: Snowflake, messageId: Snowflake, req: EditMessage) =>
     patch<Message>(`/channels/${channelId}/messages/${messageId}`, req),
   deleteMessage: (channelId: Snowflake, messageId: Snowflake) =>
@@ -449,6 +466,38 @@ export const api = {
     const form = new FormData();
     form.append("file", file);
     return requestForm<Attachment>(`/channels/${channelId}/attachments`, form);
+  },
+  // Upload ANNULABLE : on rafraîchit le jeton AVANT (un upload de 1 Go peut dépasser le TTL d'accès)
+  // puis on streame avec un AbortSignal → l'utilisateur peut annuler à tout moment.
+  uploadAttachmentAbortable: async (
+    channelId: Snowflake,
+    file: File,
+    signal: AbortSignal,
+  ): Promise<Attachment> => {
+    await ensureFreshToken();
+    const form = new FormData();
+    form.append("file", file);
+    const headers: Record<string, string> = {};
+    const tok = getAccessToken();
+    if (tok) headers["Authorization"] = `Bearer ${tok}`;
+    const res = await appFetch(BASE() + `/channels/${channelId}/attachments`, {
+      method: "POST",
+      headers,
+      body: form,
+      signal,
+    });
+    if (!res.ok) {
+      let msg = `${res.status} ${res.statusText}`;
+      try {
+        const t = await res.text();
+        if (t) msg = t;
+      } catch {
+        /* ignore */
+      }
+      throw new ApiError(res.status, msg, null);
+    }
+    const text = await res.text();
+    return (text ? JSON.parse(text) : undefined) as Attachment;
   },
   ackMessage: (channelId: Snowflake, messageId: Snowflake) =>
     post<void>(`/channels/${channelId}/messages/${messageId}/ack`),

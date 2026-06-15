@@ -12,8 +12,8 @@
 // rétablir via STUN/TURN si déploiement hors LAN.)
 const ICE_SERVERS: RTCIceServer[] = [];
 
-// Cible de débit audio : Opus mono ~64 kb/s = qualité voix élevée à faible latence.
-const OPUS_BITRATE = 64_000;
+// Cible de débit audio : Opus mono 96 kb/s = qualité voix « tier TeamSpeak » à faible latence.
+const OPUS_BITRATE = 96_000;
 const VIDEO_BITRATE = 2_500_000;
 
 // Contraintes micro/caméra : construites à CHAQUE acquisition depuis les préférences
@@ -21,18 +21,29 @@ const VIDEO_BITRATE = 2_500_000;
 import { applySink, audioConstraints, videoConstraints } from "./mediaPrefs";
 import { appFetch, httpBase, sfuWsBase } from "./instance";
 
-// Règle l'encodeur Opus dans le SDP (offre/réponse) : FEC en bande, DTX, mono, débit cible.
+// Règle l'encodeur Opus pour une voix nette à faible latence :
+//  - minptime=10 / ptime=10 : trames de 10 ms (latence d'empaquetage minimale).
+//  - useinbandfec=1 : correction d'erreur en bande → résiste à la perte de paquets (sans faute).
+//  - usedtx=0 : pas de transmission discontinue → pas de troncature de début de mot ni de bruit de
+//    confort artificiel (le gate VAD coupe déjà le micro dans les silences).
+//  - stereo=0 / maxaveragebitrate=96k : voix mono haute qualité.
 export function tuneOpus(sdp: string): string {
   const m = sdp.match(/a=rtpmap:(\d+) opus\/48000/i);
   if (!m) return sdp;
   const pt = m[1];
-  const params = `minptime=10;useinbandfec=1;usedtx=1;stereo=0;sprop-stereo=0;maxaveragebitrate=${OPUS_BITRATE};maxplaybackrate=48000`;
+  const params = `minptime=10;ptime=10;useinbandfec=1;usedtx=0;stereo=0;sprop-stereo=0;maxaveragebitrate=${OPUS_BITRATE};maxplaybackrate=48000`;
   const fmtpRe = new RegExp(`a=fmtp:${pt} [^\\r\\n]*`);
-  if (fmtpRe.test(sdp)) return sdp.replace(fmtpRe, `a=fmtp:${pt} ${params}`);
-  return sdp.replace(
-    new RegExp(`(a=rtpmap:${pt} opus/48000[^\\r\\n]*\\r?\\n)`),
-    `$1a=fmtp:${pt} ${params}\r\n`,
-  );
+  let out = fmtpRe.test(sdp)
+    ? sdp.replace(fmtpRe, `a=fmtp:${pt} ${params}`)
+    : sdp.replace(
+        new RegExp(`(a=rtpmap:${pt} opus/48000[^\\r\\n]*\\r?\\n)`),
+        `$1a=fmtp:${pt} ${params}\r\n`,
+      );
+  // Force aussi le ptime au niveau du média audio (certains navigateurs l'honorent mieux ainsi).
+  if (!/a=ptime:/.test(out)) {
+    out = out.replace(/(a=rtpmap:\d+ opus\/48000[^\r\n]*\r?\n)/, `$1a=ptime:10\r\n`);
+  }
+  return out;
 }
 
 // Attend la fin du rassemblement ICE (le SFU n'accepte pas le trickle). Résout immédiatement si
@@ -155,19 +166,32 @@ class SpeakingDetector {
         sum += v * v;
       }
       const rms = Math.sqrt(sum / e.data.length);
-      // Seuil effectif : fixe, ou « plancher de bruit + marge » en mode auto.
-      let thr = this.threshold;
+      // Seuils avec HYSTÉRÉSIS : on s'ouvre à un seuil HAUT mais on ne se referme qu'à un seuil
+      // BAS → une fois qu'on parle, les passages plus doux NE coupent PAS la voix (corrige la
+      // troncature « 3/4 de la parole »).
+      let openThr: number;
+      let closeThr: number;
       if (this.auto) {
-        // Le plancher suit le bruit : vite quand on se tait (0.05), lentement même en parlant
-        // (0.004). Cette remontée lente est ESSENTIELLE : sans elle, un bruit de fond stationnaire
-        // au-dessus du seuil maintiendrait e.on=true pour toujours et figerait le plancher bas
-        // (gate verrouillé ouvert, micro transmis en continu). Le facteur lent évite que la
-        // parole soutenue ne fasse grimper le seuil au point de se couper soi-même.
-        e.noiseFloor += (rms - e.noiseFloor) * (e.on ? 0.004 : 0.05);
-        thr = Math.max(0.02, e.noiseFloor * 2.4 + 0.012);
+        // Plancher de bruit : adaptation RAPIDE en silence ; pendant la parole on ne le laisse
+        // monter QUE si le niveau reste proche du plancher (probable bruit stationnaire, pas la
+        // voix) — ainsi une parole franche ne fait JAMAIS grimper le seuil au point de se couper.
+        if (!e.on) {
+          e.noiseFloor += (rms - e.noiseFloor) * 0.05;
+        } else if (rms < e.noiseFloor * 1.6) {
+          e.noiseFloor += (rms - e.noiseFloor) * 0.02;
+        }
+        e.noiseFloor = Math.max(0.004, e.noiseFloor);
+        openThr = e.noiseFloor * 2.4 + 0.012;
+        closeThr = e.noiseFloor * 1.35 + 0.006;
+      } else {
+        // Mode manuel : le seuil réglé ouvre ; on referme nettement plus bas (60 %).
+        openThr = this.threshold;
+        closeThr = this.threshold * 0.6;
       }
-      if (rms > thr) e.last = now; // au-dessus du seuil de parole
-      const on = now - e.last < 350; // hangover : évite le clignotement
+      const thr = e.on ? closeThr : openThr;
+      if (rms > thr) e.last = now;
+      // Hangover généreux (500 ms) : les micro-pauses entre les mots ne coupent pas la transmission.
+      const on = now - e.last < 500;
       if (on !== e.on) {
         e.on = on;
         this.cb(uid, on);
@@ -372,6 +396,14 @@ export class VoiceConnection {
         if (!isStreamAudio) this.speaking.remove(userId);
       };
     } else {
+      // Latence vidéo : par défaut le tampon de gigue accumule 300-500 ms (cam « freeze »/retard).
+      // playoutDelayHint bas vise une lecture quasi temps réel ; un petit coussin (50 ms) absorbe
+      // la gigue sans introduire de retard perceptible (cam et voix restent synchronisées).
+      try {
+        (e.receiver as unknown as { playoutDelayHint?: number }).playoutDelayHint = 0.05;
+      } catch {
+        /* non supporté */
+      }
       const { userId, kind } = parseStreamTag(e.streams[0]?.id ?? "");
       // Une piste vidéo ne porte jamais un tag audio (mic/screen_audio) : on restreint à cam/screen.
       const videoKind: "cam" | "screen" = kind === "screen" ? "screen" : "cam";

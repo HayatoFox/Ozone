@@ -532,10 +532,12 @@ pub async fn set_overwrite(
     .bind(deny as i64)
     .execute(&st.pool)
     .await?;
+    // Événement DÉDIÉ (pas un CHANNEL_UPDATE partiel qui écraserait le salon par un stub côté
+    // client) : la visibilité peut changer pour certains membres → ils re-fetchent la liste filtrée.
     st.publish(
         EventScope::Guild(gid),
-        "CHANNEL_UPDATE",
-        serde_json::json!({ "id": cid.to_string(), "guild_id": gid.to_string() }),
+        "CHANNEL_PERMISSIONS_UPDATE",
+        serde_json::json!({ "channel_id": cid.to_string(), "guild_id": gid.to_string() }),
     );
     Ok(Json(PermissionOverwrite {
         id: Snowflake::from_i64(tid),
@@ -560,10 +562,12 @@ pub async fn delete_overwrite(
         .bind(tid)
         .execute(&st.pool)
         .await?;
+    // Événement DÉDIÉ (pas un CHANNEL_UPDATE partiel qui écraserait le salon par un stub côté
+    // client) : la visibilité peut changer pour certains membres → ils re-fetchent la liste filtrée.
     st.publish(
         EventScope::Guild(gid),
-        "CHANNEL_UPDATE",
-        serde_json::json!({ "id": cid.to_string(), "guild_id": gid.to_string() }),
+        "CHANNEL_PERMISSIONS_UPDATE",
+        serde_json::json!({ "channel_id": cid.to_string(), "guild_id": gid.to_string() }),
     );
     Ok(Json(serde_json::json!({ "ok": true })))
 }

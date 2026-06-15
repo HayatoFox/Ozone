@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowRight, Hash, Paperclip, Pencil, Reply, SmilePlus, Trash2 } from "lucide-react";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ArrowRight, Hash, Lock, Paperclip, Pencil, Reply, SmilePlus, Trash2 } from "lucide-react";
 import {
+  E2EE_UNDECRYPTABLE,
   idGt,
   memberTopColorRole,
   memberTopRoleColor,
@@ -18,7 +19,7 @@ import { EmojiPicker } from "./ui/EmojiPicker";
 import { MessageContextMenu } from "./ui/MessageContextMenu";
 import { UserPopover } from "./ProfilePopout";
 import { PollView } from "./PollView";
-import { AuthedImage, authedDownload } from "./AuthedMedia";
+import { AuthedAudio, AuthedImage, AuthedVideo, authedDownload } from "./AuthedMedia";
 
 function isGrouped(prev: Message | undefined, cur: Message): boolean {
   if (!prev) return false;
@@ -59,17 +60,48 @@ export function MessageList({
     ? messages.find((m) => idGt(m.id, anchor))?.id
     : undefined;
 
-  // Auto-défilement : toujours à l'ouverture du salon, ensuite SEULEMENT si on est déjà
-  // proche du bas — sinon on ne vole pas la position de lecture de l'historique.
+  // « Épinglé au bas » : vrai tant que l'utilisateur n'a pas remonté volontairement l'historique.
+  // C'est l'état qui décide de l'auto-défilement (et non un calcul ponctuel au moment du message).
+  const pinned = useRef(true);
+  const scrollToBottom = (smooth: boolean) => {
+    const el = scrollRef.current;
+    if (el) el.scrollTo({ top: el.scrollHeight, behavior: smooth ? "smooth" : "auto" });
+  };
+
+  // Ouverture du salon : on atterrit TOUJOURS en bas (réinitialise l'épinglage).
+  // `useLayoutEffect` : positionne avant la peinture → pas de flash « en haut ».
+  useLayoutEffect(() => {
+    pinned.current = true;
+    initialScroll.current = true;
+    scrollToBottom(false);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [channelId]);
+
+  // Nouveau message (ou contenu qui change) : si on est épinglé au bas, on suit ; sinon on
+  // laisse l'utilisateur où il lit. Le premier passage (ouverture) saute l'animation.
+  useEffect(() => {
+    if (pinned.current) scrollToBottom(!initialScroll.current);
+    initialScroll.current = false;
+  }, [messages.length]);
+
+  // Le contenu peut grandir APRÈS le rendu (images/vidéos/embeds qui chargent) : tant qu'on est
+  // épinglé, on reste collé au dernier message au lieu de rester « bloqué » plus haut.
   useEffect(() => {
     const el = scrollRef.current;
-    const nearBottom =
-      !el || el.scrollHeight - el.scrollTop - el.clientHeight < 150;
-    if (initialScroll.current || nearBottom) {
-      bottomRef.current?.scrollIntoView({ behavior: initialScroll.current ? "auto" : "smooth" });
-      initialScroll.current = false;
-    }
-  }, [messages.length]);
+    const inner = el?.firstElementChild;
+    if (!el || !inner) return;
+    const ro = new ResizeObserver(() => {
+      if (pinned.current) scrollToBottom(false);
+    });
+    ro.observe(inner);
+    return () => ro.disconnect();
+  }, [channelId]);
+
+  // Suit le défilement manuel : on n'est « épinglé » que si on est proche du bas.
+  function onScroll() {
+    const el = scrollRef.current;
+    if (el) pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 120;
+  }
 
   // Styles de nom (dégradé/néon/vague) par auteur — séparés des mentions (unies).
   const styleMap = useMemo(() => {
@@ -116,7 +148,7 @@ export function MessageList({
   };
 
   return (
-    <div ref={scrollRef} className="flex-1 animate-overlay-in overflow-y-auto scroll-thin">
+    <div ref={scrollRef} onScroll={onScroll} className="flex-1 animate-overlay-in overflow-y-auto scroll-thin">
       <div className="flex min-h-full flex-col justify-end py-4">
         <ChannelWelcome name={channelName} dm={dm} channelId={channelId} />
         {messages.map((m, i) => {
@@ -523,9 +555,19 @@ function Body(p: RowProps) {
     );
   }
 
+  // MP chiffré non déchiffrable (clé locale différente de celle d'émission, ou clé non encore reçue).
+  const locked =
+    !!message.cipher && (message.content === "" || message.content === E2EE_UNDECRYPTABLE);
+
   return (
     <div className="text-normal">
-      {message.content && renderMarkdown(message.content, ctx)}
+      {locked ? (
+        <span className="inline-flex items-center gap-1.5 text-sm italic text-muted">
+          <Lock size={13} /> Message chiffré — indéchiffrable sur cet appareil
+        </span>
+      ) : (
+        message.content && renderMarkdown(message.content, ctx)
+      )}
       {message.edited_at && <span className="ml-1 text-[10px] text-muted">(modifié)</span>}
 
       {message.poll && <PollView poll={message.poll} channelId={channelId} />}
@@ -541,7 +583,7 @@ function Body(p: RowProps) {
         />
       )}
 
-      {message.content && <MediaEmbeds content={message.content} />}
+      {!locked && message.content && <MediaEmbeds content={message.content} />}
 
       {message.attachments.length > 0 && (
         <div className="mt-1 flex flex-col gap-1">
@@ -643,6 +685,20 @@ function AttachmentView({ att, onImage }: { att: Attachment; onImage: (url: stri
       />
     );
   }
+  // Vidéo : lecteur intégré pour les fichiers de taille raisonnable (le blob est chargé en mémoire ;
+  // au-delà de 100 Mio on garde le téléchargement pour ne pas saturer la RAM).
+  if (att.content_type.startsWith("video/") && att.size <= 100 * 1024 * 1024) {
+    return (
+      <AuthedVideo
+        src={url}
+        className={`max-h-80 max-w-md rounded-md ${isSpoiler ? "animate-overlay-in" : ""}`}
+      />
+    );
+  }
+  // Audio : lecteur natif inline (léger).
+  if (att.content_type.startsWith("audio/")) {
+    return <AuthedAudio src={url} className="max-w-md" />;
+  }
   return (
     <button
       onClick={() => void authedDownload(url, cleanName)}
@@ -650,8 +706,17 @@ function AttachmentView({ att, onImage }: { att: Attachment; onImage: (url: stri
     >
       <Paperclip size={16} className="shrink-0" />
       {cleanName}
+      <span className="text-xs text-muted">{formatBytes(att.size)}</span>
     </button>
   );
+}
+
+// Taille lisible (Ko/Mo/Go).
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} o`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(0)} Ko`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} Mo`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} Go`;
 }
 
 function EditBox({

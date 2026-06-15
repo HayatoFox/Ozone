@@ -1028,8 +1028,16 @@ function DmRow({
   const name = dm.name || others.map(displayName).join(", ") || "Groupe";
   const first = others[0];
   const isGroup = others.length > 1;
-  // Statut perso du correspondant (1:1) — sélection scalaire (pas d'objet neuf).
+  // Statut perso du correspondant (1:1) — sélections SCALAIRES (jamais d'objet neuf : boucle getSnapshot).
   const customStatus = useStore((s) => (first ? s.customStatus[first.id] : undefined));
+  // Présence (en ligne/absent/ne pas déranger/hors ligne) du correspondant 1:1.
+  const presence = useStore((s) => (first && !isGroup ? s.presences[first.id] : undefined));
+  // Non-lu : dernier message du MP au-delà du marqueur de lecture (réf. stable depuis le store).
+  const lastReadId = useStore((s) => s.readStates[dm.id]?.last_read_id);
+  const mentionCount = useStore((s) => s.readStates[dm.id]?.mention_count ?? 0);
+  const unread =
+    !active &&
+    isChannelUnread(dm.last_message_id, lastReadId ? { channel_id: dm.id, last_read_id: lastReadId, mention_count: mentionCount } : undefined);
   const subtitle = isGroup
     ? `${dm.recipients.length} membres`
     : customStatus || null;
@@ -1040,12 +1048,26 @@ function DmRow({
         active ? "bg-selected text-white" : "text-channel hover:bg-hover hover:text-normal"
       }`}
     >
-      <Avatar name={name} id={first?.id ?? dm.id} size={32} avatarId={first?.avatar_id} />
+      <Avatar
+        name={name}
+        id={first?.id ?? dm.id}
+        size={32}
+        avatarId={first?.avatar_id}
+        status={presence ?? (isGroup ? undefined : "offline")}
+      />
       <span className="flex min-w-0 flex-1 flex-col text-left">
-        <span className="truncate text-[15px] leading-tight">{name}</span>
+        <span className={`truncate text-[15px] leading-tight ${unread ? "font-semibold text-white" : ""}`}>
+          {name}
+        </span>
         {subtitle && <span className="truncate text-xs text-muted leading-tight">{subtitle}</span>}
       </span>
       <DmTypingDots channelId={dm.id} />
+      {/* Badge non-lus : compteur de mentions (99+) sinon pastille simple. */}
+      {unread && (
+        <span className="ml-auto flex h-[18px] min-w-[18px] items-center justify-center rounded-full bg-dnd px-1 text-[11px] font-bold text-white">
+          {mentionCount > 0 ? (mentionCount > 99 ? "99+" : mentionCount) : ""}
+        </span>
+      )}
     </button>
   );
 }

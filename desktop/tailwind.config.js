@@ -125,6 +125,11 @@ export default {
           "0%": { transform: "translateX(-110%)" },
           "100%": { transform: "translateX(260%)" },
         },
+        // Barre de progression indéterminée (upload en cours, va-et-vient).
+        indeterminate: {
+          "0%": { transform: "translateX(-100%)" },
+          "100%": { transform: "translateX(400%)" },
+        },
         // Plein écran vocal : la scène s'étire rapidement vers les coins (pas brut).
         "fs-zoom": {
           from: { transform: "scale(0.86)", opacity: "0.4" },
@@ -142,6 +147,7 @@ export default {
         "overlay-in": "overlay-in 150ms ease-out",
         "pop-in": "pop-in 140ms cubic-bezier(0.16, 1, 0.3, 1)",
         loadbar: "loadbar 1.1s ease-in-out infinite",
+        indeterminate: "indeterminate 1s ease-in-out infinite",
         "fs-zoom": "fs-zoom 320ms cubic-bezier(0.16, 1, 0.3, 1)",
         "spot-in": "spot-in 200ms cubic-bezier(0.16, 1, 0.3, 1)",
       },

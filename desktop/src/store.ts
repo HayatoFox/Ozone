@@ -14,6 +14,12 @@ import {
   type MediaPrefs,
 } from "./lib/mediaPrefs";
 import { mediaUrl } from "./lib/instance";
+import {
+  decryptFromUser,
+  encryptForUser,
+  ensureKeypair,
+  hasPublicKey,
+} from "./lib/e2ee";
 import { PERM, PERM_ALL } from "./lib/permissions";
 import {
   CH_CATEGORY,
@@ -22,6 +28,7 @@ import {
   CH_THREAD_PUBLIC,
   CH_VOICE,
   type Channel,
+  type CreateMessage,
   type DMChannel,
   type Guild,
   type InstanceInfo,
@@ -333,6 +340,7 @@ interface State {
   castVote: (channelId: Snowflake, messageId: Snowflake, answerIds: number[]) => Promise<void>;
   refreshGuilds: () => Promise<void>;
   refreshRoles: (guildId: Snowflake) => Promise<void>;
+  refreshChannels: (guildId: Snowflake) => Promise<void>;
   refreshMembers: (guildId: Snowflake) => Promise<void>;
   refreshDMs: () => Promise<void>;
   refreshRelationships: () => Promise<void>;
@@ -446,6 +454,59 @@ export function sortChannels(chs: Channel[]): Channel[] {
   return [...chs].sort(
     (a, b) => a.position - b.position || (a.id === b.id ? 0 : idGt(a.id, b.id) ? 1 : -1),
   );
+}
+
+// Tri chronologique DÉTERMINISTE des messages par snowflake (id) croissant + déduplication.
+// Garantit un ordre d'affichage stable, identique à chaque chargement et quel que soit l'ordre
+// d'arrivée (REST initial ou événements Gateway).
+export function sortMessages(msgs: Message[]): Message[] {
+  const seen = new Set<Snowflake>();
+  const out: Message[] = [];
+  for (const m of msgs) {
+    if (seen.has(m.id)) continue;
+    seen.add(m.id);
+    out.push(m);
+  }
+  return out.sort((a, b) => (a.id === b.id ? 0 : idGt(a.id, b.id) ? 1 : -1));
+}
+
+// ───────────────────────── Chiffrement de bout en bout (MP) ─────────────────────────
+
+/** L'autre participant d'un MP **1:1** (exactement 2 membres), ou null (groupe / salon). */
+function dmPeer(get: () => State, channelId: Snowflake): User | null {
+  const dm = get().dms.find((d) => d.id === channelId);
+  if (!dm || dm.recipients.length !== 2) return null;
+  const meId = get().me?.id;
+  return dm.recipients.find((u) => u.id !== meId) ?? null;
+}
+
+// Sentinelle affichée si le déchiffrement échoue (clé locale différente de celle d'émission).
+export const E2EE_UNDECRYPTABLE = " e2ee-undecryptable ";
+
+/** Déchiffre le contenu d'un message MP chiffré (et son message cité). No-op hors MP 1:1. */
+async function decryptMessage(get: () => State, channelId: Snowflake, m: Message): Promise<Message> {
+  const peer = dmPeer(get, channelId);
+  if (!peer) return m;
+  const decode = async (cipher: string) => {
+    try {
+      return await decryptFromUser(peer.id, cipher);
+    } catch {
+      return E2EE_UNDECRYPTABLE;
+    }
+  };
+  let out = m;
+  if (m.cipher) out = { ...out, content: await decode(m.cipher) };
+  // Aperçu de réponse : le message cité peut lui aussi être chiffré.
+  if (out.referenced_message?.cipher) {
+    out = {
+      ...out,
+      referenced_message: {
+        ...out.referenced_message,
+        content: await decode(out.referenced_message.cipher),
+      },
+    };
+  }
+  return out;
 }
 
 export const useStore = create<State>((set, get) => ({
@@ -662,6 +723,8 @@ export const useStore = create<State>((set, get) => ({
         .getMySettings()
         .then((s) => applyRemoteSettings(s.data ?? {}, set, get))
         .catch(() => {}),
+      // Chiffrement E2EE des MP : génère/recharge la paire de clés locale et publie la clé publique.
+      ensureKeypair().catch(() => {}),
     ]);
     startGateway(set, get);
   },
@@ -718,6 +781,25 @@ export const useStore = create<State>((set, get) => ({
     try {
       const roles = await api.listRoles(guildId);
       set((s) => ({ rolesByGuild: { ...s.rolesByGuild, [guildId]: roles } }));
+    } catch {
+      /* ignore */
+    }
+  },
+
+  // Recharge la liste de salons depuis le serveur (qui filtre par VIEW_CHANNEL — autorité de
+  // visibilité, overwrites compris). Appelée en direct quand une permission change : les salons
+  // devenus inaccessibles disparaissent, les nouveaux apparaissent, sans reboot.
+  refreshChannels: async (guildId) => {
+    if (!get().channelsByGuild[guildId]) return; // guilde non chargée → rien à rafraîchir
+    try {
+      const channels = sortChannels(await api.listChannels(guildId));
+      set((s) => ({ channelsByGuild: { ...s.channelsByGuild, [guildId]: channels } }));
+      // Si le salon ouvert n'est plus visible (permission retirée), bascule sur un salon texte.
+      const sel = get().selectedChannelByGuild[guildId];
+      if (sel && !channels.some((c) => c.id === sel)) {
+        const fallback = channels.find((c) => c.type === CH_TEXT);
+        if (fallback) await get().selectChannel(fallback.id);
+      }
     } catch {
       /* ignore */
     }
@@ -1274,8 +1356,14 @@ export const useStore = create<State>((set, get) => ({
     if (get().messagesByChannel[channelId]) return;
     try {
       const msgs = await api.listMessages(channelId, { limit: 50 });
+      // Déchiffrement E2EE des MP (avant affichage → pas de scintillement « cadenas → texte »).
+      const decrypted = msgs.some((m) => m.cipher || m.referenced_message?.cipher)
+        ? await Promise.all(msgs.map((m) => decryptMessage(get, channelId, m)))
+        : msgs;
+      // Tri DÉTERMINISTE par snowflake (ordre chronologique stable, indépendant de l'ordre
+      // renvoyé par le serveur) → l'affichage est identique à chaque (re)chargement.
       set((s) => ({
-        messagesByChannel: { ...s.messagesByChannel, [channelId]: msgs.reverse() },
+        messagesByChannel: { ...s.messagesByChannel, [channelId]: sortMessages(decrypted) },
       }));
     } catch (e) {
       set({ error: errMsg(e) });
@@ -1285,13 +1373,27 @@ export const useStore = create<State>((set, get) => ({
   sendMessage: async (channelId, content, opts) => {
     const nonce = `${get().me?.id ?? "0"}-${performance.now()}`;
     try {
-      await api.sendMessage(channelId, {
+      let body: CreateMessage = {
         content,
         nonce,
         attachments: opts?.attachments,
         reply_to: opts?.replyTo,
         sticker_id: opts?.stickerId,
-      });
+      };
+      // MP 1:1 : si le pair a publié une clé, on chiffre le texte de bout en bout. Le serveur (et
+      // l'admin de l'instance) ne voit qu'un blob opaque ; `content` part vide. Repli en clair
+      // uniquement si le pair n'a pas (encore) de clé publique — sans quoi l'échange serait bloqué.
+      const peer = dmPeer(get, channelId);
+      if (peer && content.trim() && (await hasPublicKey(peer.id))) {
+        try {
+          const cipher = await encryptForUser(peer.id, content);
+          body = { ...body, content: "", cipher };
+        } catch {
+          set({ error: "Échec du chiffrement du message." });
+          return false;
+        }
+      }
+      await api.sendMessage(channelId, body);
       // Le message réel arrivera par la Gateway (MESSAGE_CREATE).
       return true;
     } catch (e) {
@@ -1314,6 +1416,19 @@ export const useStore = create<State>((set, get) => ({
 
   editMessage: async (channelId, messageId, content) => {
     try {
+      // MP 1:1 chiffré : on ré-chiffre l'édition (sinon le texte clair fuirait côté serveur et
+      // l'ancien blob réécraserait l'affichage au rechargement).
+      const peer = dmPeer(get, channelId);
+      if (peer && content.trim() && (await hasPublicKey(peer.id))) {
+        try {
+          const cipher = await encryptForUser(peer.id, content);
+          await api.editMessage(channelId, messageId, { content: "", cipher });
+          return;
+        } catch {
+          set({ error: "Échec du chiffrement du message." });
+          return;
+        }
+      }
       await api.editMessage(channelId, messageId, { content });
     } catch (e) {
       set({ error: errMsg(e) });
@@ -1367,6 +1482,100 @@ function startGateway(
   gateway.connect();
 }
 
+// Refetch des salons débouncé par guilde : une mutation de permission peut changer la visibilité
+// (overwrites) — on laisse le serveur retrancher, sans marteler à chaque événement.
+const channelRefreshTimers = new Map<Snowflake, ReturnType<typeof setTimeout>>();
+function scheduleChannelRefresh(get: () => State, guildId: Snowflake): void {
+  if (!get().channelsByGuild[guildId]) return;
+  const existing = channelRefreshTimers.get(guildId);
+  if (existing) clearTimeout(existing);
+  channelRefreshTimers.set(
+    guildId,
+    setTimeout(() => {
+      channelRefreshTimers.delete(guildId);
+      void get().refreshChannels(guildId);
+    }, 250),
+  );
+}
+
+// Applique un MESSAGE_CREATE (déjà déchiffré le cas échéant) : non-lus, typing, insertion triée,
+// ack et notification. Extrait pour permettre l'attente du déchiffrement E2EE avant application.
+function applyMessageCreate(
+  m: Message,
+  set: (partial: Partial<State> | ((s: State) => Partial<State>)) => void,
+  get: () => State,
+): void {
+  const me = get().me;
+  const active = activeChannelId(get()) === m.channel_id;
+  const mine = m.author.id === me?.id;
+  const mentionsMe =
+    !!me &&
+    (m.content.includes(`<@${me.id}>`) ||
+      m.content.includes(`<@!${me.id}>`) ||
+      m.content.includes("@everyone") ||
+      m.content.includes("@here"));
+
+  set((s) => {
+    // Met à jour le dernier message du salon (pour le calcul des non-lus).
+    const channelsByGuild = bumpChannelLastMessage(s.channelsByGuild, m.channel_id, m.id);
+    // Marqueur de lecture : auto-lu si actif, sinon comptage des mentions.
+    let readStates = s.readStates;
+    if (active || mine) {
+      readStates = {
+        ...readStates,
+        [m.channel_id]: { channel_id: m.channel_id, last_read_id: m.id, mention_count: 0 },
+      };
+    } else if (mentionsMe) {
+      const cur = readStates[m.channel_id];
+      readStates = {
+        ...readStates,
+        [m.channel_id]: {
+          channel_id: m.channel_id,
+          last_read_id: cur?.last_read_id ?? "0",
+          mention_count: (cur?.mention_count ?? 0) + 1,
+        },
+      };
+    }
+
+    // Le message arrivé → l'indicateur « écrit… » de l'auteur n'a plus lieu d'être.
+    let typing = s.typing;
+    const chTyping = typing[m.channel_id];
+    if (chTyping && m.author.id in chTyping) {
+      const next = { ...chTyping };
+      delete next[m.author.id];
+      typing = { ...typing, [m.channel_id]: next };
+    }
+
+    // Bump aussi le dernier message des MP (non couverts par channelsByGuild).
+    let dms = s.dms;
+    const di = dms.findIndex((d) => d.id === m.channel_id);
+    if (di !== -1 && dms[di].last_message_id !== m.id) {
+      dms = [...dms];
+      dms[di] = { ...dms[di], last_message_id: m.id };
+    }
+
+    const list = s.messagesByChannel[m.channel_id];
+    if (!list || list.some((x) => x.id === m.id)) {
+      return { channelsByGuild, readStates, typing, dms };
+    }
+    // Insertion triée par snowflake : un message arrivé hors-ordre (latence Gateway) se range
+    // à sa place chronologique au lieu d'être collé en fin.
+    return {
+      channelsByGuild,
+      readStates,
+      typing,
+      dms,
+      messagesByChannel: { ...s.messagesByChannel, [m.channel_id]: sortMessages([...list, m]) },
+    };
+  });
+
+  // Si le salon est actif, persiste la lecture côté serveur.
+  if (active && !mine) void api.ackMessage(m.channel_id, m.id).catch(() => {});
+
+  // Notification bureau (mentions + MP), si activée et pertinent.
+  if (!mine) maybeNotify(get(), m, { mentionsMe, active });
+}
+
 function applyEvent(
   ev: GatewayEvent,
   set: (partial: Partial<State> | ((s: State) => Partial<State>)) => void,
@@ -1374,88 +1583,32 @@ function applyEvent(
 ): void {
   switch (ev.t) {
     case "MESSAGE_CREATE": {
-      const m = ev.d as Message;
-      const me = get().me;
-      const active = activeChannelId(get()) === m.channel_id;
-      const mine = m.author.id === me?.id;
-      const mentionsMe =
-        !!me &&
-        (m.content.includes(`<@${me.id}>`) ||
-          m.content.includes(`<@!${me.id}>`) ||
-          m.content.includes("@everyone") ||
-          m.content.includes("@here"));
-
-      set((s) => {
-        // Met à jour le dernier message du salon (pour le calcul des non-lus).
-        const channelsByGuild = bumpChannelLastMessage(s.channelsByGuild, m.channel_id, m.id);
-        // Marqueur de lecture : auto-lu si actif, sinon comptage des mentions.
-        let readStates = s.readStates;
-        if (active || mine) {
-          readStates = {
-            ...readStates,
-            [m.channel_id]: { channel_id: m.channel_id, last_read_id: m.id, mention_count: 0 },
-          };
-        } else if (mentionsMe) {
-          const cur = readStates[m.channel_id];
-          readStates = {
-            ...readStates,
-            [m.channel_id]: {
-              channel_id: m.channel_id,
-              last_read_id: cur?.last_read_id ?? "0",
-              mention_count: (cur?.mention_count ?? 0) + 1,
-            },
-          };
-        }
-
-        // Le message arrivé → l'indicateur « écrit… » de l'auteur n'a plus lieu d'être.
-        let typing = s.typing;
-        const chTyping = typing[m.channel_id];
-        if (chTyping && m.author.id in chTyping) {
-          const next = { ...chTyping };
-          delete next[m.author.id];
-          typing = { ...typing, [m.channel_id]: next };
-        }
-
-        // Bump aussi le dernier message des MP (non couverts par channelsByGuild).
-        let dms = s.dms;
-        const di = dms.findIndex((d) => d.id === m.channel_id);
-        if (di !== -1 && dms[di].last_message_id !== m.id) {
-          dms = [...dms];
-          dms[di] = { ...dms[di], last_message_id: m.id };
-        }
-
-        const list = s.messagesByChannel[m.channel_id];
-        if (!list || list.some((x) => x.id === m.id)) {
-          return { channelsByGuild, readStates, typing, dms };
-        }
-        return {
-          channelsByGuild,
-          readStates,
-          typing,
-          dms,
-          messagesByChannel: { ...s.messagesByChannel, [m.channel_id]: [...list, m] },
-        };
-      });
-
-      // Si le salon est actif, persiste la lecture côté serveur.
-      if (active && !mine) void api.ackMessage(m.channel_id, m.id).catch(() => {});
-
-      // Notification bureau (mentions + MP), si activée et pertinent.
-      if (!mine) maybeNotify(get(), m, { mentionsMe, active });
+      const raw = ev.d as Message;
+      // MP chiffré : on déchiffre AVANT d'appliquer → notif/affichage cohérents, jamais de blob brut.
+      if (raw.cipher || raw.referenced_message?.cipher) {
+        void decryptMessage(get, raw.channel_id, raw).then((m) => applyMessageCreate(m, set, get));
+      } else {
+        applyMessageCreate(raw, set, get);
+      }
       break;
     }
     case "MESSAGE_UPDATE": {
-      const m = ev.d as Message;
-      set((s) => {
-        const list = s.messagesByChannel[m.channel_id];
-        if (!list) return {};
-        return {
-          messagesByChannel: {
-            ...s.messagesByChannel,
-            [m.channel_id]: list.map((x) => (x.id === m.id ? m : x)),
-          },
-        };
-      });
+      const raw = ev.d as Message;
+      const apply = (m: Message) =>
+        set((s) => {
+          const list = s.messagesByChannel[m.channel_id];
+          if (!list) return {};
+          return {
+            messagesByChannel: {
+              ...s.messagesByChannel,
+              [m.channel_id]: list.map((x) => (x.id === m.id ? m : x)),
+            },
+          };
+        });
+      // Édition d'un MP chiffré : déchiffrer avant d'appliquer.
+      if (raw.cipher || raw.referenced_message?.cipher) {
+        void decryptMessage(get, raw.channel_id, raw).then(apply);
+      } else apply(raw);
       break;
     }
     case "MESSAGE_DELETE": {
@@ -1645,6 +1798,8 @@ function applyEvent(
           : [...list, r];
         return { rolesByGuild: { ...s.rolesByGuild, [gid]: next } };
       });
+      // Un changement de permissions de rôle peut modifier ma visibilité des salons (overwrites).
+      scheduleChannelRefresh(get, gid);
       break;
     }
     case "GUILD_ROLE_DELETE": {
@@ -1670,6 +1825,7 @@ function applyEvent(
         }
         return out;
       });
+      scheduleChannelRefresh(get, d.guild_id);
       break;
     }
     case "GUILD_MEMBER_UPDATE": {
@@ -1704,6 +1860,8 @@ function applyEvent(
           },
         };
       });
+      // Si c'est MON rôle qui change, ma visibilité des salons peut changer → refetch serveur.
+      if (d.user_id === get().me?.id) scheduleChannelRefresh(get, d.guild_id);
       break;
     }
     case "GUILD_MEMBER_ADD":
@@ -1712,9 +1870,21 @@ function applyEvent(
       if (get().membersByGuild[d.guild_id]) void get().refreshMembers(d.guild_id);
       break;
     }
+    // Visibilité d'un salon potentiellement modifiée (overwrites) : refetch de la liste filtrée
+    // par le serveur (autorité). Pas de payload de salon → on ne touche pas au cache directement.
+    case "CHANNEL_PERMISSIONS_UPDATE": {
+      const d = ev.d as { guild_id: Snowflake };
+      scheduleChannelRefresh(get, d.guild_id);
+      break;
+    }
     case "CHANNEL_CREATE":
     case "CHANNEL_UPDATE": {
       const c = ev.d as Channel;
+      // Garde anti-stub : un payload sans nom/type n'est pas un vrai salon (ne pas écraser le cache).
+      if (c.guild_id && (c.name === undefined || c.type === undefined)) {
+        scheduleChannelRefresh(get, c.guild_id);
+        break;
+      }
       if (!c.guild_id) {
         // MP / groupe : quelqu'un vient d'ouvrir une conversation avec nous → elle doit
         // apparaître EN DIRECT dans la liste (sinon le premier message est invisible).
@@ -2389,6 +2559,14 @@ export function isChannelUnread(
   if (!lastMessageId) return false;
   if (!rs) return true;
   return idGt(lastMessageId, rs.last_read_id);
+}
+
+// Nombre de conversations MP non-lues (pour le badge du bouton Accueil du rail), plafonné à 99+.
+export function unreadDmCount(
+  dms: DMChannel[],
+  readStates: Record<Snowflake, ReadState>,
+): number {
+  return dms.filter((d) => isChannelUnread(d.last_message_id, readStates[d.id])).length;
 }
 
 // Une guilde a-t-elle des salons non-lus (parmi ses salons chargés) ?

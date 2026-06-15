@@ -8,7 +8,7 @@ use crate::state::AppState;
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
-use ozone_proto::dto::{UpdateProfile, UserProfile, UserSettings};
+use ozone_proto::dto::{PublicKey, SetPublicKey, UpdateProfile, UserProfile, UserSettings};
 use ozone_proto::Snowflake;
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
@@ -244,4 +244,47 @@ pub async fn put_settings(
     .execute(&st.pool)
     .await?;
     Ok(Json(req))
+}
+
+// ─────────────────────── Clés de chiffrement DM (E2EE) ───────────────────────
+// La clé PRIVÉE ne quitte jamais le client. Le serveur ne stocke/expose que la clé PUBLIQUE
+// (P-256 ECDH, SPKI base64) afin que chaque participant puisse dériver le secret partagé.
+
+/// Taille max de la clé publique SPKI base64 (P-256 ≈ 120 octets bruts → ~160 en base64 ; marge large).
+const MAX_PUBLIC_KEY_LEN: usize = 1024;
+
+/// `PUT /users/@me/keys` — publie SA clé publique de chiffrement DM.
+pub async fn put_public_key(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<SetPublicKey>,
+) -> AppResult<Json<PublicKey>> {
+    let key = req.public_key.trim();
+    if key.is_empty() || key.len() > MAX_PUBLIC_KEY_LEN {
+        return Err(AppError::bad_request("clé publique invalide"));
+    }
+    sqlx::query("UPDATE users SET dm_public_key = ? WHERE id = ?")
+        .bind(key)
+        .bind(user.id.as_i64())
+        .execute(&st.pool)
+        .await?;
+    Ok(Json(PublicKey {
+        public_key: Some(key.to_string()),
+    }))
+}
+
+/// `GET /users/:user_id/keys` — clé publique de chiffrement DM d'un utilisateur (peut être absente).
+pub async fn get_public_key(
+    State(st): State<AppState>,
+    _user: AuthUser,
+    Path(target): Path<String>,
+) -> AppResult<Json<PublicKey>> {
+    let target = parse_i64(&target)?;
+    let public_key: Option<String> = sqlx::query("SELECT dm_public_key FROM users WHERE id = ?")
+        .bind(target)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?
+        .get("dm_public_key");
+    Ok(Json(PublicKey { public_key }))
 }

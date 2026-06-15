@@ -131,6 +131,18 @@ pub struct User {
     pub email: Option<String>,
 }
 
+/// Clé publique de chiffrement DM d'un utilisateur (P-256 ECDH, SPKI base64).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PublicKey {
+    pub public_key: Option<String>,
+}
+
+/// Dépôt de SA clé publique de chiffrement DM.
+#[derive(Clone, Debug, Deserialize)]
+pub struct SetPublicKey {
+    pub public_key: String,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Guild {
     pub id: Snowflake,
@@ -384,6 +396,10 @@ pub struct Message {
     /// Embeds riches (surtout webhooks). Vide ⇒ omis.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub embeds: Vec<MessageEmbed>,
+    /// Texte chiffré de bout en bout (MP 1:1). Présent ⇒ `content` est vide et le serveur ne voit
+    /// qu'un blob opaque ; le client déchiffre via ECDH avec l'autre participant.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cipher: Option<String>,
 }
 
 /// Embed riche : carte structurée attachée à un message.
@@ -440,11 +456,17 @@ pub struct CreateMessage {
     /// Embeds riches (gate `EMBED_LINKS`).
     #[serde(default)]
     pub embeds: Vec<MessageEmbed>,
+    /// Texte chiffré de bout en bout (MP 1:1). Présent ⇒ `content` est ignoré/vide côté serveur.
+    #[serde(default)]
+    pub cipher: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EditMessage {
     pub content: String,
+    /// Nouvelle charge chiffrée E2EE (MP 1:1). Présent ⇒ `content` ignoré/vidé côté serveur.
+    #[serde(default)]
+    pub cipher: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]

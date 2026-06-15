@@ -2,8 +2,15 @@ import { useCallback, useEffect, useState } from "react";
 import * as CM from "@radix-ui/react-context-menu";
 import { Compass, Plus } from "lucide-react";
 import { api } from "../api";
-import { guildHasUnread, guildMentionCount, isMuted, useStore } from "../store";
-import { initials } from "../lib/format";
+import {
+  guildHasUnread,
+  guildMentionCount,
+  isChannelUnread,
+  isMuted,
+  unreadDmCount,
+  useStore,
+} from "../store";
+import { colorFor, initials } from "../lib/format";
 import { mediaUrl } from "../lib/instance";
 import { OVERLAY_ANIM } from "../lib/anim";
 import { Tip } from "./ui/Tooltip";
@@ -16,6 +23,7 @@ export function ServerRail() {
   const view = useStore((s) => s.view);
   const channelsByGuild = useStore((s) => s.channelsByGuild);
   const readStates = useStore((s) => s.readStates);
+  const dms = useStore((s) => s.dms);
   const notif = useStore((s) => s.notif);
   const selectGuild = useStore((s) => s.selectGuild);
   const selectHome = useStore((s) => s.selectHome);
@@ -24,6 +32,15 @@ export function ServerRail() {
   const [discovering, setDiscovering] = useState(false);
 
   const homeActive = view.kind === "home";
+  // Badge MP : nombre de conversations non-lues (le bouton Accueil agrège tous les MP).
+  const dmUnread = unreadDmCount(dms, readStates);
+  const me = useStore((s) => s.me);
+  const activeDM = useStore((s) => s.activeDM);
+  const openDM = useStore((s) => s.openDM);
+  // Pile d'avatars des MP non-lus (façon Discord), tout en haut du rail — disparaissent à la lecture.
+  const unreadDms = dms.filter(
+    (d) => d.id !== activeDM && isChannelUnread(d.last_message_id, readStates[d.id]),
+  );
 
   return (
     <div className="flex w-[72px] shrink-0 flex-col items-center gap-2 bg-deepest py-3">
@@ -33,9 +50,62 @@ export function ServerRail() {
         label="Accueil"
         squircle
         brand
+        unread={!homeActive && dmUnread > 0}
+        mentions={dmUnread}
       >
         <OzoneMark />
       </RailButton>
+
+      {/* MP non-lus : avatar de la personne + compteur, cliquable, au-dessus des serveurs. */}
+      {unreadDms.length > 0 && (
+        <>
+          <div className="h-0.5 w-8 rounded-full bg-white/10" />
+          <div className="flex w-full flex-col items-center gap-2">
+            {unreadDms.map((d) => {
+              const other = d.recipients.find((u) => u.id !== me?.id);
+              const dmName =
+                d.name ||
+                d.recipients
+                  .filter((u) => u.id !== me?.id)
+                  .map((u) => u.display_name || u.username)
+                  .join(", ") ||
+                "MP";
+              const count = readStates[d.id]?.mention_count ?? 0;
+              return (
+                <div key={d.id} className="group relative flex w-full items-center justify-center">
+                  {/* Pastille blanche « non-lu » (demi-cercle qui s'allonge au survol), à gauche de l'avatar. */}
+                  <span className="absolute left-0 w-1 rounded-r-full bg-white transition-all h-2 group-hover:h-5" />
+                  <Tip label={d.name || (other ? other.display_name || other.username : "Message privé")} side="right">
+                    <button
+                      onClick={() => void openDM(d.id)}
+                      className="relative h-12 w-12 overflow-hidden rounded-full ring-2 ring-transparent transition hover:ring-white/25"
+                    >
+                      {other?.avatar_id ? (
+                        <img
+                          src={mediaUrl(`/api/users/${other.id}/avatar?v=${other.avatar_id}`)}
+                          alt=""
+                          className="h-full w-full object-cover"
+                          draggable={false}
+                        />
+                      ) : (
+                        <span
+                          className="flex h-full w-full items-center justify-center text-sm font-semibold text-white"
+                          style={{ backgroundColor: colorFor(other?.id ?? d.id) }}
+                        >
+                          {initials(dmName)}
+                        </span>
+                      )}
+                      <span className="absolute -bottom-0.5 -right-0.5 min-w-[18px] rounded-full border-2 border-deepest bg-dnd px-1 text-center text-xs font-bold leading-tight text-white">
+                        {count > 99 ? "99+" : count > 0 ? count : "•"}
+                      </span>
+                    </button>
+                  </Tip>
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
 
       <div className="h-0.5 w-8 rounded-full bg-white/10" />
 
@@ -181,7 +251,7 @@ function RailButton({
           key={mentions}
           className="absolute -bottom-0.5 right-1 min-w-[18px] animate-pop-in rounded-full border-2 border-deepest bg-dnd px-1 text-center text-xs font-bold leading-tight text-white shadow-[0_0_8px_rgb(218_62_68/0.6)]"
         >
-          {mentions}
+          {mentions > 99 ? "99+" : mentions}
         </span>
       ) : null}
     </div>

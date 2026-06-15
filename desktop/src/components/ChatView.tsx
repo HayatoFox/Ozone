@@ -3,11 +3,13 @@ import {
   Archive,
   AtSign,
   BarChart3,
+  Check,
   EyeOff,
   Hash,
   Lock,
   MessagesSquare,
   PanelRight,
+  Paperclip,
   PlusCircle,
   Smile,
   Sticker as StickerIcon,
@@ -25,7 +27,6 @@ import { MessageList } from "./MessageList";
 import { InboxButton, PinsButton, SearchButton } from "./HeaderActions";
 import { AddToGroupModal } from "./AddToGroupModal";
 import { CreatePollModal } from "./CreatePollModal";
-import { AuthedImage } from "./AuthedMedia";
 import { ChatSkeleton } from "./ui/Skeleton";
 import { EmojiPicker } from "./ui/EmojiPicker";
 import { StickerPicker } from "./ui/StickerPicker";
@@ -33,6 +34,21 @@ import { Avatar } from "./Avatar";
 import { VoiceStage } from "./VoiceStage";
 import { VoiceTextChat } from "./VoiceTextChat";
 import { CH_TEXT, CH_VOICE, isThreadType, type Attachment, type Channel, type Message } from "../types";
+
+// Taille maximale d'une pièce jointe (1 Go) — alignée sur le plafond serveur.
+const MAX_ATTACHMENT_BYTES = 1024 * 1024 * 1024;
+
+// Upload « stagé » : un fichier choisi s'upload en arrière-plan, annulable, et le message
+// n'est envoyé qu'une fois tous les uploads terminés.
+export interface StagedUpload {
+  localId: string;
+  name: string;
+  size: number;
+  type: string;
+  status: "uploading" | "done" | "error";
+  attachment?: Attachment;
+  abort: () => void;
+}
 
 // Détermine le salon actuellement affiché (guilde ou MP).
 function useActiveChannelId(): string | null {
@@ -65,8 +81,9 @@ export function ChatView() {
   const toggleDmProfile = useStore((s) => s.toggleDmProfile);
   const voiceTextOpen = useStore((s) => s.voiceTextOpen);
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
-  const [pending, setPending] = useState<Attachment[]>([]);
-  const [uploading, setUploading] = useState(false);
+  // Uploads « stagés » : chaque fichier choisi s'upload en arrière-plan (annulable) ; le message
+  // n'est envoyé qu'une fois tous les uploads terminés.
+  const [uploads, setUploads] = useState<StagedUpload[]>([]);
   const [dragging, setDragging] = useState(false);
   const [addToGroup, setAddToGroup] = useState(false);
   const dragDepth = useRef(0);
@@ -79,10 +96,13 @@ export function ChatView() {
   });
 
   // Changement de salon : la réponse en cours et les pièces jointes appartiennent à
-  // l'ancien salon → on les réinitialise (sinon on répond/poste dans le mauvais salon).
+  // l'ancien salon → on les réinitialise (en annulant les uploads en cours).
   useEffect(() => {
     setReplyTarget(null);
-    setPending([]);
+    setUploads((u) => {
+      u.forEach((x) => x.status === "uploading" && x.abort());
+      return [];
+    });
   }, [channelId]);
 
   if (!channelId) {
@@ -115,25 +135,59 @@ export function ChatView() {
       ? dm.name || dm.recipients.filter((u) => u.id !== me?.id).map(displayName).join(", ")
       : "Salon");
 
-  async function onFiles(files: FileList | File[] | null) {
+  function onFiles(files: FileList | File[] | null) {
     if (!channelId || !files || files.length === 0) return;
     const target = channelId; // salon cible figé pour toute la durée de l'upload
-    setUploading(true);
-    try {
-      for (const f of Array.from(files)) {
-        const att = await api.uploadAttachment(target, f);
-        // L'utilisateur a changé de salon entre-temps → la PJ appartient à l'ancien salon : on
-        // l'abandonne (ne pas l'injecter dans le composeur du nouveau salon).
-        if (currentChannelRef.current !== target) return;
-        setPending((p) => [...p, att]);
+    for (const f of Array.from(files)) {
+      if (f.size > MAX_ATTACHMENT_BYTES) {
+        setError(`« ${f.name} » dépasse la limite de 1 Go.`);
+        continue;
       }
-    } catch (e) {
-      if (currentChannelRef.current === target) {
-        setError(e instanceof Error ? e.message : "Échec du téléversement.");
-      }
-    } finally {
-      if (currentChannelRef.current === target) setUploading(false);
+      const localId = `${f.name}-${f.size}-${performance.now()}-${Math.random()}`;
+      const controller = new AbortController();
+      const entry: StagedUpload = {
+        localId,
+        name: f.name,
+        size: f.size,
+        type: f.type,
+        status: "uploading",
+        abort: () => controller.abort(),
+      };
+      setUploads((u) => [...u, entry]);
+      // Upload en arrière-plan (annulable). On NE bloque PAS : l'utilisateur prépare son message
+      // pendant ce temps ; l'envoi attendra la fin (cf. Composer).
+      api
+        .uploadAttachmentAbortable(target, f, controller.signal)
+        .then((att) => {
+          // Salon changé entre-temps → la PJ appartient à l'ancien salon : on l'abandonne.
+          if (currentChannelRef.current !== target) {
+            setUploads((u) => u.filter((x) => x.localId !== localId));
+            return;
+          }
+          setUploads((u) =>
+            u.map((x) => (x.localId === localId ? { ...x, status: "done", attachment: att } : x)),
+          );
+        })
+        .catch((e) => {
+          // Annulation volontaire → on retire l'entrée silencieusement.
+          if (controller.signal.aborted) {
+            setUploads((u) => u.filter((x) => x.localId !== localId));
+            return;
+          }
+          setUploads((u) => u.map((x) => (x.localId === localId ? { ...x, status: "error" } : x)));
+          if (currentChannelRef.current === target) {
+            setError(e instanceof Error ? e.message : "Échec du téléversement.");
+          }
+        });
     }
+  }
+
+  function cancelUpload(localId: string) {
+    setUploads((u) => {
+      const entry = u.find((x) => x.localId === localId);
+      entry?.abort();
+      return u.filter((x) => x.localId !== localId);
+    });
   }
 
   return (
@@ -221,9 +275,9 @@ export function ChatView() {
         guildId={view.kind === "guild" ? view.guildId : undefined}
         replyTarget={replyTarget}
         onClearReply={() => setReplyTarget(null)}
-        pending={pending}
-        setPending={setPending}
-        uploading={uploading}
+        uploads={uploads}
+        setUploads={setUploads}
+        onCancelUpload={cancelUpload}
         onFiles={onFiles}
       />
 
@@ -276,9 +330,9 @@ export function Composer({
   guildId,
   replyTarget,
   onClearReply,
-  pending,
-  setPending,
-  uploading,
+  uploads,
+  setUploads,
+  onCancelUpload,
   onFiles,
 }: {
   channelId: string;
@@ -286,13 +340,16 @@ export function Composer({
   guildId?: string;
   replyTarget: Message | null;
   onClearReply: () => void;
-  pending: Attachment[];
-  setPending: React.Dispatch<React.SetStateAction<Attachment[]>>;
-  uploading: boolean;
+  uploads: StagedUpload[];
+  setUploads: React.Dispatch<React.SetStateAction<StagedUpload[]>>;
+  onCancelUpload: (localId: string) => void;
   onFiles: (files: FileList | File[] | null) => void | Promise<void>;
 }) {
   const [text, setText] = useState("");
   const [pollOpen, setPollOpen] = useState(false);
+  // Envoi demandé alors que des uploads tournent encore → on enverra dès qu'ils sont finis.
+  const [sendRequested, setSendRequested] = useState(false);
+  const uploading = uploads.some((u) => u.status === "uploading");
   const sendMessage = useStore((s) => s.sendMessage);
   const customEmojis = useStore((s) => (guildId ? s.emojisByGuild[guildId] : undefined));
   const stickers = useStore((s) => (guildId ? s.stickersByGuild[guildId] : undefined));
@@ -386,26 +443,44 @@ export function Composer({
   }, [cooldownLeft > 0]); // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => setCooldownLeft(0), [channelId]); // changement de salon → pas de report
 
-  async function submit() {
-    const content = text.trim();
-    if (!content && pending.length === 0) return;
-    if (slowmode > 0 && !slowmodeExempt && cooldownLeft > 0) return;
-    const attachments = pending.map((a) => a.id);
+  // Envoi RÉEL : appelé une fois tous les uploads terminés (ou immédiatement s'il n'y en a pas).
+  async function doSend(content: string) {
+    const done = uploads.filter((u) => u.status === "done" && u.attachment);
+    const attachments = done.map((u) => u.attachment!.id);
+    if (!content && attachments.length === 0) return;
     const replyTo = replyTarget?.id;
-    const pendingSnapshot = pending;
-    // Effacement optimiste du composeur.
     setText("");
-    setPending([]);
+    setUploads([]);
     onClearReply();
     const ok = await sendMessage(channelId, content, { attachments, replyTo });
     if (!ok) {
-      // Échec : restaure le brouillon + pièces jointes (sans écraser une nouvelle saisie).
-      setText((cur) => cur || content);
-      setPending((cur) => (cur.length ? cur : pendingSnapshot));
+      setText((cur) => cur || content); // échec : on restaure le brouillon
     } else if (slowmode > 0 && !slowmodeExempt) {
       setCooldownLeft(slowmode);
     }
   }
+
+  function submit() {
+    const content = text.trim();
+    const hasUploads = uploads.length > 0;
+    if (!content && !hasUploads) return;
+    if (slowmode > 0 && !slowmodeExempt && cooldownLeft > 0) return;
+    // Des uploads tournent encore → on diffère l'envoi (le message part dès qu'ils sont finis).
+    if (uploads.some((u) => u.status === "uploading")) {
+      setSendRequested(true);
+      return;
+    }
+    void doSend(content);
+  }
+
+  // Envoi différé : quand tous les uploads sont terminés et qu'un envoi a été demandé, on part.
+  useEffect(() => {
+    if (!sendRequested) return;
+    if (uploads.some((u) => u.status === "uploading")) return; // pas encore prêt
+    setSendRequested(false);
+    void doSend(text.trim());
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sendRequested, uploads]);
 
   function onChange(v: string) {
     setText(v);
@@ -430,21 +505,37 @@ export function Composer({
         </div>
       )}
 
-      {pending.length > 0 && (
+      {uploads.length > 0 && (
         <div className="flex animate-accordion flex-wrap gap-2 rounded-t-xl bg-userpanel px-4 py-2">
-          {pending.map((a) => (
-            <div key={a.id} className="group/att relative animate-pop-in">
-              {a.content_type.startsWith("image/") ? (
-                <AuthedImage src={mediaUrl(`/api${a.url}`)} alt={a.filename} className="h-20 w-20 rounded object-cover ring-1 ring-line" />
-              ) : (
-                <div className="flex h-20 w-32 items-center justify-center rounded bg-sidebar p-2 text-center text-xs text-muted ring-1 ring-line">
-                  {a.filename}
+          {uploads.map((u) => (
+            <div
+              key={u.localId}
+              className="group/att relative w-40 animate-pop-in overflow-hidden rounded bg-sidebar p-2 ring-1 ring-line"
+            >
+              <div className="flex items-center gap-2">
+                <Paperclip size={14} className="shrink-0 text-muted" />
+                <span className="min-w-0 flex-1 truncate text-xs text-normal" title={u.name}>
+                  {u.name.startsWith("SPOILER_") ? u.name.slice(8) : u.name}
+                </span>
+              </div>
+              {/* État de l'upload : barre animée pendant le transfert, coche/erreur ensuite. */}
+              {u.status === "uploading" && (
+                <div className="mt-1.5 h-1 overflow-hidden rounded-full bg-black/30">
+                  <div className="h-full w-1/3 animate-indeterminate rounded-full bg-accent" />
                 </div>
               )}
+              {u.status === "done" && (
+                <div className="mt-1 flex items-center gap-1 text-[11px] text-online">
+                  <Check size={11} /> Prêt
+                </div>
+              )}
+              {u.status === "error" && (
+                <div className="mt-1 text-[11px] text-dnd">Échec</div>
+              )}
               <button
-                onClick={() => setPending((p) => p.filter((x) => x.id !== a.id))}
+                onClick={() => onCancelUpload(u.localId)}
                 className="pressable absolute -right-1.5 -top-1.5 rounded-full bg-dnd p-0.5 text-white shadow-sm transition-transform hover:scale-110"
-                title="Retirer"
+                title={u.status === "uploading" ? "Annuler l'upload" : "Retirer"}
               >
                 <X size={12} />
               </button>
@@ -526,7 +617,7 @@ export function Composer({
 
       <div
         className={`flex items-center gap-3 bg-field px-4 shadow-sm ring-1 ring-white/[0.04] transition-all duration-200 focus-within:ring-2 focus-within:ring-accent/50 ${
-          replyTarget || pending.length > 0 ? "rounded-b-xl" : "rounded-xl"
+          replyTarget || uploads.length > 0 ? "rounded-b-xl" : "rounded-xl"
         }`}
       >
         <input
@@ -555,17 +646,15 @@ export function Composer({
         />
         <button
           onClick={() => fileInput.current?.click()}
-          disabled={uploading}
-          title="Joindre un fichier"
-          className="pressable text-interactive-normal hover:text-interactive-hover disabled:opacity-50"
+          title="Joindre un fichier (jusqu'à 1 Go)"
+          className="pressable text-interactive-normal hover:text-interactive-hover"
         >
           <PlusCircle size={22} />
         </button>
         <button
           onClick={() => spoilerInput.current?.click()}
-          disabled={uploading}
           title="Joindre en spoiler"
-          className="pressable text-interactive-normal hover:text-interactive-hover disabled:opacity-50"
+          className="pressable text-interactive-normal hover:text-interactive-hover"
         >
           <EyeOff size={20} />
         </button>
@@ -610,7 +699,11 @@ export function Composer({
               void submit();
             }
           }}
-          placeholder={uploading ? "Téléversement…" : `Envoyer un message dans ${title}`}
+          placeholder={
+            uploading && sendRequested
+              ? "Envoi dès la fin du téléversement…"
+              : `Envoyer un message dans ${title}`
+          }
           className="max-h-[200px] flex-1 resize-none self-center bg-transparent py-3 text-normal outline-none scroll-thin placeholder:text-muted"
         />
       </div>

@@ -2,10 +2,12 @@ import { useEffect, useRef, useState } from "react";
 import { MessageSquare, Upload, X } from "lucide-react";
 import { api } from "../api";
 import { useStore } from "../store";
-import type { Attachment, Channel, Message } from "../types";
+import type { Channel, Message } from "../types";
 import { MessageList } from "./MessageList";
-import { Composer } from "./ChatView";
+import { Composer, type StagedUpload } from "./ChatView";
 import { ChatSkeleton } from "./ui/Skeleton";
+
+const MAX_ATTACHMENT_BYTES = 1024 * 1024 * 1024;
 
 // Discussion textuelle intégrée d'un salon vocal (panneau de droite, façon Discord).
 // Le backend n'impose aucun type de salon pour les messages → on réutilise toute la pile texte.
@@ -17,8 +19,7 @@ export function VoiceTextChat({ channel, guildId }: { channel: Channel; guildId:
   const setVoiceTextOpen = useStore((s) => s.setVoiceTextOpen);
 
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
-  const [pending, setPending] = useState<Attachment[]>([]);
-  const [uploading, setUploading] = useState(false);
+  const [uploads, setUploads] = useState<StagedUpload[]>([]);
   const [dragging, setDragging] = useState(false);
   const dragDepth = useRef(0);
 
@@ -27,22 +28,49 @@ export function VoiceTextChat({ channel, guildId }: { channel: Channel; guildId:
     void loadMessages(channel.id);
     markRead(channel.id);
     setReplyTarget(null);
-    setPending([]);
+    setUploads((u) => {
+      u.forEach((x) => x.status === "uploading" && x.abort());
+      return [];
+    });
   }, [channel.id, loadMessages, markRead]);
 
-  async function onFiles(files: FileList | File[] | null) {
+  // Uploads stagés annulables (même modèle que ChatView).
+  function onFiles(files: FileList | File[] | null) {
     if (!files || files.length === 0) return;
-    setUploading(true);
-    try {
-      for (const f of Array.from(files)) {
-        const att = await api.uploadAttachment(channel.id, f);
-        setPending((p) => [...p, att]);
+    for (const f of Array.from(files)) {
+      if (f.size > MAX_ATTACHMENT_BYTES) {
+        setError(`« ${f.name} » dépasse la limite de 1 Go.`);
+        continue;
       }
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Échec du téléversement.");
-    } finally {
-      setUploading(false);
+      const localId = `${f.name}-${f.size}-${performance.now()}-${Math.random()}`;
+      const controller = new AbortController();
+      setUploads((u) => [
+        ...u,
+        { localId, name: f.name, size: f.size, type: f.type, status: "uploading", abort: () => controller.abort() },
+      ]);
+      api
+        .uploadAttachmentAbortable(channel.id, f, controller.signal)
+        .then((att) =>
+          setUploads((u) =>
+            u.map((x) => (x.localId === localId ? { ...x, status: "done", attachment: att } : x)),
+          ),
+        )
+        .catch((e) => {
+          if (controller.signal.aborted) {
+            setUploads((u) => u.filter((x) => x.localId !== localId));
+            return;
+          }
+          setUploads((u) => u.map((x) => (x.localId === localId ? { ...x, status: "error" } : x)));
+          setError(e instanceof Error ? e.message : "Échec du téléversement.");
+        });
     }
+  }
+
+  function cancelUpload(localId: string) {
+    setUploads((u) => {
+      u.find((x) => x.localId === localId)?.abort();
+      return u.filter((x) => x.localId !== localId);
+    });
   }
 
   return (
@@ -97,9 +125,9 @@ export function VoiceTextChat({ channel, guildId }: { channel: Channel; guildId:
         guildId={guildId}
         replyTarget={replyTarget}
         onClearReply={() => setReplyTarget(null)}
-        pending={pending}
-        setPending={setPending}
-        uploading={uploading}
+        uploads={uploads}
+        setUploads={setUploads}
+        onCancelUpload={cancelUpload}
         onFiles={onFiles}
       />
 

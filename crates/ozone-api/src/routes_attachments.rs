@@ -16,9 +16,11 @@ use axum::Json;
 use ozone_proto::dto::Attachment;
 use ozone_proto::perms;
 use sqlx::Row;
+use tokio::io::AsyncWriteExt;
 
-/// Taille maximale d'une pièce jointe (25 Mo).
-pub const MAX_ATTACHMENT_SIZE: usize = 25 * 1024 * 1024;
+/// Taille maximale d'une pièce jointe (1 Go). Le fichier est STREAMÉ vers le disque (jamais
+/// bufferisé entièrement en mémoire) → un upload de 1 Go ne consomme pas 1 Go de RAM.
+pub const MAX_ATTACHMENT_SIZE: usize = 1024 * 1024 * 1024;
 
 /// Nettoie un nom de fichier pour l'affichage / l'en-tête `Content-Disposition`
 /// (le fichier sur disque est nommé par identifiant, jamais par ce nom → pas de traversée).
@@ -52,42 +54,62 @@ pub async fn upload_attachment(
     )
     .await?;
 
+    let id = st.ids.next();
+    let path = st.upload_dir.join(id.as_i64().to_string());
+
     let mut filename = None;
     let mut content_type = None;
-    let mut data = None;
-    while let Some(field) = multipart
+    let mut size: usize = 0;
+    let mut wrote_file = false;
+    while let Some(mut field) = multipart
         .next_field()
         .await
         .map_err(|_| AppError::bad_request("requête multipart invalide"))?
     {
-        if field.file_name().is_some() {
-            filename = field.file_name().map(|s| s.to_string());
-            content_type = field.content_type().map(|s| s.to_string());
-            data = Some(
-                field
-                    .bytes()
-                    .await
-                    .map_err(|_| AppError::bad_request("lecture du fichier échouée"))?,
-            );
-            break;
+        if field.file_name().is_none() {
+            continue;
         }
+        filename = field.file_name().map(|s| s.to_string());
+        content_type = field.content_type().map(|s| s.to_string());
+        // STREAMING : on écrit chaque morceau au fil de l'eau, en bornant la taille — pas de
+        // bufferisation complète en mémoire (indispensable pour des fichiers jusqu'à 1 Go).
+        let mut file = tokio::fs::File::create(&path)
+            .await
+            .map_err(|e| AppError::internal(format!("création du fichier : {e}")))?;
+        loop {
+            let chunk = match field.chunk().await {
+                Ok(Some(c)) => c,
+                Ok(None) => break,
+                Err(_) => {
+                    let _ = tokio::fs::remove_file(&path).await;
+                    return Err(AppError::bad_request("lecture du fichier échouée"));
+                }
+            };
+            size += chunk.len();
+            if size > MAX_ATTACHMENT_SIZE {
+                drop(file);
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(AppError::bad_request("fichier trop volumineux (max 1 Go)"));
+            }
+            if file.write_all(&chunk).await.is_err() {
+                let _ = tokio::fs::remove_file(&path).await;
+                return Err(AppError::internal("écriture du fichier échouée"));
+            }
+        }
+        let _ = file.flush().await;
+        wrote_file = true;
+        break;
     }
-    let data = data.ok_or_else(|| AppError::bad_request("aucun fichier fourni"))?;
-    if data.is_empty() {
+    if !wrote_file {
+        return Err(AppError::bad_request("aucun fichier fourni"));
+    }
+    if size == 0 {
+        let _ = tokio::fs::remove_file(&path).await;
         return Err(AppError::bad_request("fichier vide"));
-    }
-    if data.len() > MAX_ATTACHMENT_SIZE {
-        return Err(AppError::bad_request("fichier trop volumineux (max 25 Mo)"));
     }
     let filename = sanitize_filename(&filename.unwrap_or_default());
     let content_type = content_type.unwrap_or_else(|| "application/octet-stream".to_string());
-    let size = data.len() as i64;
-
-    let id = st.ids.next();
-    let path = st.upload_dir.join(id.as_i64().to_string());
-    tokio::fs::write(&path, &data)
-        .await
-        .map_err(|e| AppError::internal(format!("écriture du fichier : {e}")))?;
+    let size = size as i64;
 
     sqlx::query(
         "INSERT INTO attachments (id, channel_id, uploader_id, message_id, filename, content_type, size, created_at) \
@@ -131,9 +153,31 @@ pub async fn serve_attachment(
 
     // Le fichier est localisé par identifiant (jamais par le nom fourni) → pas de traversée.
     let path = st.upload_dir.join(id.to_string());
-    let bytes = tokio::fs::read(&path)
+    let file = tokio::fs::File::open(&path)
         .await
         .map_err(|_| AppError::not_found("fichier introuvable"))?;
+    let file_len = file
+        .metadata()
+        .await
+        .map(|m| m.len())
+        .unwrap_or(0);
+    // STREAMING : on lit le fichier par morceaux de 64 Kio et on les pousse dans le corps de la
+    // réponse → un téléchargement de 1 Go ne charge jamais 1 Go en mémoire.
+    let stream = futures_util::stream::unfold(
+        (file, vec![0u8; 64 * 1024]),
+        |(mut f, mut buf)| async move {
+            use tokio::io::AsyncReadExt;
+            match f.read(&mut buf).await {
+                Ok(0) => None,
+                Ok(n) => Some((
+                    Ok::<_, std::io::Error>(axum::body::Bytes::copy_from_slice(&buf[..n])),
+                    (f, buf),
+                )),
+                Err(e) => Some((Err(e), (f, buf))),
+            }
+        },
+    );
+    let body = Body::from_stream(stream);
 
     let stored_name: String = row.get("filename");
     let ctype: String = row.get("content_type");
@@ -146,8 +190,13 @@ pub async fn serve_attachment(
         || ctype == "text/plain";
     let disposition = if inline_ok { "inline" } else { "attachment" };
 
-    let mut resp = Response::new(Body::from(bytes));
+    let mut resp = Response::new(body);
     let headers = resp.headers_mut();
+    if file_len > 0 {
+        if let Ok(v) = header::HeaderValue::from_str(&file_len.to_string()) {
+            headers.insert(header::CONTENT_LENGTH, v);
+        }
+    }
     headers.insert(
         header::CONTENT_TYPE,
         header::HeaderValue::from_str(&ctype)

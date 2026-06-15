@@ -159,16 +159,33 @@ async fn signal_socket(socket: WebSocket, cmd_tx: mpsc::UnboundedSender<PeerCmd>
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<String>();
     let _ = cmd_tx.send(PeerCmd::WsConnected(out_tx));
 
-    // Sortant : messages de l'acteur → WebSocket.
+    // Sortant : messages de l'acteur → WebSocket, AVEC keepalive (ping périodique).
+    // Sans trafic, un proxy/NAT/pare-feu ferme la socket TCP inactive (~10-60 s) : la renégociation
+    // tombe alors silencieusement et le média finit par mourir. Un Ping WebSocket toutes les 20 s
+    // garde le tunnel vivant (le navigateur répond Pong automatiquement).
     let send_task = tokio::spawn(async move {
-        while let Some(msg) = out_rx.recv().await {
-            if sink.send(Message::Text(msg)).await.is_err() {
-                break;
+        let mut ping = tokio::time::interval(std::time::Duration::from_secs(20));
+        ping.tick().await; // absorbe le tick immédiat initial
+        loop {
+            tokio::select! {
+                msg = out_rx.recv() => match msg {
+                    Some(m) => {
+                        if sink.send(Message::Text(m)).await.is_err() {
+                            break;
+                        }
+                    }
+                    None => break,
+                },
+                _ = ping.tick() => {
+                    if sink.send(Message::Ping(Vec::new())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
 
-    // Entrant : messages du client → acteur.
+    // Entrant : messages du client → acteur (les Pong/Ping de keepalive sont ignorés).
     while let Some(Ok(msg)) = stream.next().await {
         match msg {
             Message::Text(t) => {

@@ -7,11 +7,26 @@ import { mediaUrl } from "../lib/instance";
 import type { DMChannel, User, UserProfile } from "../types";
 import { CH_GROUP } from "../types";
 import { Avatar } from "./Avatar";
+import { StatusDot } from "./StatusDot";
 import { UserPopover } from "./ProfilePopout";
 
 interface Mutual {
   guilds: { id: string; name: string; icon_id: string | null }[];
   friends: User[];
+}
+
+// Libellé FR d'un statut de présence.
+function presenceLabel(status: string): string {
+  switch (status) {
+    case "online":
+      return "En ligne";
+    case "idle":
+      return "Absent";
+    case "dnd":
+      return "Ne pas déranger";
+    default:
+      return "Hors ligne";
+  }
 }
 
 // Panneau latéral droit des MP : profil du correspondant (1:1) ou membres (groupe).
@@ -27,6 +42,9 @@ export function DMProfilePanel({ dm }: { dm: DMChannel }) {
 
 function UserPanel({ partner }: { partner: User }) {
   const relationship = useStore((s) => s.relationships.find((r) => r.user.id === partner.id));
+  // Présence (statut) du correspondant — sélection scalaire (réf. stable du store).
+  const presence = useStore((s) => s.presences[partner.id]) ?? "offline";
+  const customStatus = useStore((s) => s.customStatus[partner.id]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [mutual, setMutual] = useState<Mutual | null>(null);
 
@@ -63,13 +81,26 @@ function UserPanel({ partner }: { partner: User }) {
       <div className="px-4">
         <div className="-mt-10 mb-2">
           <div className="inline-block rounded-full border-[6px] border-sidebar">
-            <Avatar name={name} id={partner.id} size={76} avatarId={profile?.avatar_id ?? partner.avatar_id} />
+            <Avatar
+              name={name}
+              id={partner.id}
+              size={76}
+              avatarId={profile?.avatar_id ?? partner.avatar_id}
+              status={presence}
+              ring="var(--bg-sidebar)"
+            />
           </div>
         </div>
 
         <div className="rounded-2xl bg-deepest p-4 shadow-sm">
           <div className="text-xl font-bold text-header">{name}</div>
           <div className="text-sm text-muted">@{profile?.username ?? partner.username}</div>
+          {/* Statut de présence lisible + statut perso éventuel. */}
+          <div className="mt-1.5 flex items-center gap-1.5 text-sm text-muted">
+            <StatusDot status={presence} size={10} />
+            <span>{presenceLabel(presence)}</span>
+            {customStatus && <span className="truncate">— {customStatus}</span>}
+          </div>
           {profile?.pronouns && <div className="mt-1 text-xs text-muted">{profile.pronouns}</div>}
 
           {profile?.bio && (

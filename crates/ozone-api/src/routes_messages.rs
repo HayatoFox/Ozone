@@ -26,7 +26,7 @@ const MSG_SELECT: &str =
     "SELECT m.id, m.channel_id, m.author_id, m.content, m.type AS kind, m.nonce, \
      m.created_at, m.edited_at, m.reference_id, m.pinned, m.webhook_id, \
      m.author_name AS wh_name, m.author_avatar AS wh_avatar, \
-     m.sticker_id, stk.name AS sticker_name, stk.format_type AS sticker_format, m.embeds, \
+     m.sticker_id, stk.name AS sticker_name, stk.format_type AS sticker_format, m.embeds, m.cipher, \
      u.username, u.display_name, u.avatar_id \
      FROM messages m JOIN users u ON u.id = m.author_id \
      LEFT JOIN stickers stk ON stk.id = m.sticker_id";
@@ -100,6 +100,7 @@ fn row_to_message_basic(r: SqliteRow) -> Message {
             .get::<Option<String>, _>("embeds")
             .and_then(|s| serde_json::from_str(&s).ok())
             .unwrap_or_default(),
+        cipher: r.get("cipher"),
     }
 }
 
@@ -506,6 +507,23 @@ pub async fn create_message(
     let (gid, _owner, perms_acc) =
         pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::SEND_MESSAGES).await?;
     let content = req.content.trim_end();
+    // Chiffrement de bout en bout (MP 1:1) : blob opaque « iv|ciphertext » base64. Le serveur le
+    // stocke tel quel et ne voit jamais le texte clair → inaccessible à l'admin de l'instance.
+    // Réservé aux MP (pas de guilde) ; borné pour éviter l'abus de stockage.
+    let cipher = req.cipher.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(c) = cipher {
+        if gid != 0 {
+            return Err(AppError::bad_request(
+                "le chiffrement de bout en bout n'est disponible qu'en message privé",
+            ));
+        }
+        if c.len() > 64 * 1024 {
+            return Err(AppError::bad_request("charge chiffrée trop volumineuse"));
+        }
+    }
+    // Garantie E2EE : dès qu'un cipher est présent, le serveur IGNORE tout texte clair fourni — il
+    // ne le stocke pas, ne l'indexe pas (FTS), ne le passe ni à l'auto-mod ni aux mentions.
+    let content: &str = if cipher.is_some() { "" } else { content };
     // Embeds : nécessite EMBED_LINKS, assainis et bornés. Un message peut n'être QUE des embeds.
     let embeds_json = if req.embeds.is_empty() {
         None
@@ -517,11 +535,12 @@ pub async fn create_message(
         }
         sanitize_embeds(req.embeds.clone())
     };
-    // Un message peut être vide s'il porte au moins une pièce jointe, un sticker OU un embed.
+    // Un message peut être vide s'il porte au moins une pièce jointe, un sticker, un embed OU un cipher.
     if (content.is_empty()
         && req.attachments.is_empty()
         && req.sticker_id.is_none()
-        && embeds_json.is_none())
+        && embeds_json.is_none()
+        && cipher.is_none())
         || content.chars().count() > 4000
     {
         return Err(AppError::bad_request(
@@ -650,8 +669,8 @@ pub async fn create_message(
     let id = st.ids.next();
     let now = now_ms();
     sqlx::query(
-        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, created_at, edited_at, sticker_id, embeds) \
-         VALUES (?, ?, ?, ?, 0, ?, ?, 0, ?, NULL, ?, ?)",
+        "INSERT INTO messages (id, channel_id, author_id, content, type, nonce, reference_id, pinned, created_at, edited_at, sticker_id, embeds, cipher) \
+         VALUES (?, ?, ?, ?, 0, ?, ?, 0, ?, NULL, ?, ?, ?)",
     )
     .bind(id.as_i64())
     .bind(cid)
@@ -662,6 +681,7 @@ pub async fn create_message(
     .bind(now)
     .bind(sticker_id)
     .bind(embeds_json.as_deref())
+    .bind(cipher)
     .execute(&st.pool)
     .await?;
 
@@ -826,25 +846,45 @@ pub async fn edit_message(
 ) -> AppResult<Json<Message>> {
     let cid = parse_i64(&cid)?;
     let mid = parse_i64(&mid)?;
-    pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::VIEW_CHANNEL).await?;
+    let (gid, _owner, _perms_acc) =
+        pg::require_channel_perm(&st.pool, cid, user.id.as_i64(), perms::VIEW_CHANNEL).await?;
     let existing = fetch_message_in_channel(&st, cid, mid).await?;
     if existing.author.id.as_i64() != user.id.as_i64() {
         return Err(AppError::forbidden(
             "vous n'êtes pas l'auteur de ce message",
         ));
     }
-    let content = req.content.trim_end();
-    if content.is_empty() || content.chars().count() > 4000 {
-        return Err(AppError::bad_request(
-            "contenu de message invalide (1 à 4000 caractères)",
-        ));
+    // Édition chiffrée (MP 1:1) : on remplace le blob opaque et on garde `content` vide. Réservé aux MP.
+    let cipher = req.cipher.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(c) = cipher {
+        if gid != 0 {
+            return Err(AppError::bad_request(
+                "le chiffrement de bout en bout n'est disponible qu'en message privé",
+            ));
+        }
+        if c.len() > 64 * 1024 {
+            return Err(AppError::bad_request("charge chiffrée trop volumineuse"));
+        }
+        sqlx::query("UPDATE messages SET content = '', cipher = ?, edited_at = ? WHERE id = ?")
+            .bind(c)
+            .bind(now_ms())
+            .bind(mid)
+            .execute(&st.pool)
+            .await?;
+    } else {
+        let content = req.content.trim_end();
+        if content.is_empty() || content.chars().count() > 4000 {
+            return Err(AppError::bad_request(
+                "contenu de message invalide (1 à 4000 caractères)",
+            ));
+        }
+        sqlx::query("UPDATE messages SET content = ?, edited_at = ? WHERE id = ?")
+            .bind(content)
+            .bind(now_ms())
+            .bind(mid)
+            .execute(&st.pool)
+            .await?;
     }
-    sqlx::query("UPDATE messages SET content = ?, edited_at = ? WHERE id = ?")
-        .bind(content)
-        .bind(now_ms())
-        .bind(mid)
-        .execute(&st.pool)
-        .await?;
     let msg = hydrate(
         &st,
         fetch_message_in_channel(&st, cid, mid).await?,

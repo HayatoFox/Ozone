@@ -32,7 +32,8 @@ pub async fn connect_and_migrate(db_path: &str) -> anyhow::Result<SqlitePool> {
     // 0022 (paramètres de salon vocal/texte), 0023 (sticker_id sur les messages),
     // 0024 (salon système de guilde), 0025 (règles d'auto-modération),
     // 0026 (réglages de guilde : notifs/AFK/vanity), 0027 (embeds de message),
-    // 0028 (cycle de vie des fils : archivage/verrou/membres).
+    // 0028 (cycle de vie des fils : archivage/verrou/membres),
+    // 0029 (chiffrement E2EE des MP : clé publique utilisateur + colonne cipher).
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }
