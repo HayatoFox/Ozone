@@ -726,6 +726,10 @@ pub struct DMChannel {
     pub owner_id: Option<Snowflake>,
     pub recipients: Vec<User>,
     pub last_message_id: Option<Snowflake>,
+    /// Messages non lus par l'utilisateur courant (badge numérique par MP). Calculé serveur,
+    /// incrémenté en direct côté client, remis à zéro à la lecture.
+    #[serde(default)]
+    pub unread_count: i64,
 }
 
 /// Ouvre un MP (1 destinataire) ou crée un groupe (2 à 9 destinataires).
@@ -1097,6 +1101,9 @@ pub struct ReadState {
     pub channel_id: Snowflake,
     pub last_read_id: Snowflake,
     pub mention_count: i64,
+    /// Nombre de messages non lus (id > last_read_id) — calculé à la volée, pour le badge par MP.
+    #[serde(default)]
+    pub unread_count: i64,
 }
 
 /// Réglage de notification d'une portée (`scope_type` : 0 = guilde, 1 = salon).

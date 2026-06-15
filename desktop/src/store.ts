@@ -949,12 +949,19 @@ export const useStore = create<State>((set, get) => ({
     const last = latestMessageId(get(), channelId);
     if (!last) return;
     const cur = get().readStates[channelId];
-    if (cur && cur.last_read_id === last && cur.mention_count === 0) return;
+    const dm = get().dms.find((d) => d.id === channelId);
+    // Déjà entièrement lu (état + badge MP à zéro) → rien à faire.
+    if (cur && cur.last_read_id === last && cur.mention_count === 0 && (dm?.unread_count ?? 0) === 0)
+      return;
     set((s) => ({
       readStates: {
         ...s.readStates,
         [channelId]: { channel_id: channelId, last_read_id: last, mention_count: 0 },
       },
+      // Remet le badge non-lus du MP à zéro (no-op de ref si ce n'est pas un MP).
+      dms: s.dms.some((d) => d.id === channelId)
+        ? s.dms.map((d) => (d.id === channelId ? { ...d, unread_count: 0 } : d))
+        : s.dms,
     }));
     void api.ackMessage(channelId, last).catch(() => {});
   },
@@ -1521,7 +1528,8 @@ function applyMessageCreate(
   set((s) => {
     // Met à jour le dernier message du salon (pour le calcul des non-lus).
     const channelsByGuild = bumpChannelLastMessage(s.channelsByGuild, m.channel_id, m.id);
-    // Marqueur de lecture : auto-lu si actif, sinon comptage des mentions.
+    // Marqueur de lecture : auto-lu si actif/de soi, sinon comptage des mentions. (Le compteur de
+    // non-lus PAR MP vit sur l'objet DM `dms`, mis à jour plus bas — c'est lui qui alimente le badge.)
     let readStates = s.readStates;
     if (active || mine) {
       readStates = {
@@ -1549,12 +1557,14 @@ function applyMessageCreate(
       typing = { ...typing, [m.channel_id]: next };
     }
 
-    // Bump aussi le dernier message des MP (non couverts par channelsByGuild).
+    // Bump aussi le dernier message des MP (non couverts par channelsByGuild) + le compteur de non-lus
+    // par MP : remis à 0 si le salon est actif ou si c'est mon propre message, sinon +1 (badge numérique).
     let dms = s.dms;
     const di = dms.findIndex((d) => d.id === m.channel_id);
     if (di !== -1 && dms[di].last_message_id !== m.id) {
       dms = [...dms];
-      dms[di] = { ...dms[di], last_message_id: m.id };
+      const unread = active || mine ? 0 : (dms[di].unread_count ?? 0) + 1;
+      dms[di] = { ...dms[di], last_message_id: m.id, unread_count: unread };
     }
 
     const list = s.messagesByChannel[m.channel_id];
@@ -2074,6 +2084,10 @@ function applyEvent(
             mention_count: 0,
           },
         },
+        // Lu sur un autre appareil → efface aussi le badge non-lus de ce MP ici.
+        dms: s.dms.some((x) => x.id === d.channel_id)
+          ? s.dms.map((x) => (x.id === d.channel_id ? { ...x, unread_count: 0 } : x))
+          : s.dms,
       }));
       break;
     }

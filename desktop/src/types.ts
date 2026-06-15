@@ -433,6 +433,8 @@ export interface DMChannel {
   owner_id: Snowflake | null;
   recipients: User[];
   last_message_id: Snowflake | null;
+  /** Messages non lus de ce MP (badge numérique) : serveur au boot, incrémenté en direct, remis à 0 à la lecture. */
+  unread_count?: number;
 }
 
 export interface CreateDM {
@@ -689,6 +691,8 @@ export interface ReadState {
   channel_id: Snowflake;
   last_read_id: Snowflake;
   mention_count: number;
+  /** Nombre de messages non lus (badge numérique par MP). Calculé serveur + incrémenté en direct. */
+  unread_count?: number;
 }
 
 export interface NotificationSetting {

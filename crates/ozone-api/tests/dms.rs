@@ -495,3 +495,60 @@ async fn add_and_leave_group() {
         "carol ne doit plus pouvoir lire les messages après avoir quitté le groupe"
     );
 }
+
+/// 6. La liste des MP rapporte `unread_count` par MP — y compris pour un MP JAMAIS ouvert (pas de
+/// read_state), et les messages de soi ne comptent pas. C'est la source du badge numérique du rail.
+#[tokio::test]
+async fn dm_list_reports_unread_count() {
+    let app = app().await;
+    let alice_tok = register(&app, "alice", "alice@unread.fr").await;
+    let bob_tok = register(&app, "bob", "bob@unread.fr").await;
+    let bob_id = uid(&app, &bob_tok).await;
+
+    let (_, channel) = send(
+        &app,
+        rq(
+            "POST",
+            "/users/@me/channels",
+            Some(json!({ "recipients": [bob_id] })),
+            Some(&alice_tok),
+        ),
+    )
+    .await;
+    let cid = channel["id"].as_str().unwrap().to_string();
+    assert_eq!(channel["unread_count"].as_i64(), Some(0), "nouveau MP : 0 non-lu");
+
+    // Bob envoie 2 messages ; Alice ne les a jamais ouverts (aucun read_state).
+    for i in 1..=2 {
+        send(
+            &app,
+            rq(
+                "POST",
+                &format!("/channels/{cid}/messages"),
+                Some(json!({ "content": i.to_string() })),
+                Some(&bob_tok),
+            ),
+        )
+        .await;
+    }
+
+    // La liste des MP d'Alice indique 2 non-lus, SANS qu'elle ait jamais ouvert le MP.
+    let (_, alist) = send(&app, rq("GET", "/users/@me/channels", None, Some(&alice_tok))).await;
+    let adm = alist
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"].as_str() == Some(&cid))
+        .expect("le MP doit être listé pour alice");
+    assert_eq!(adm["unread_count"].as_i64(), Some(2), "2 non-lus même sans read_state (jamais ouvert)");
+
+    // Côté Bob (expéditeur), ses propres messages ne comptent pas comme non-lus.
+    let (_, blist) = send(&app, rq("GET", "/users/@me/channels", None, Some(&bob_tok))).await;
+    let bdm = blist
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"].as_str() == Some(&cid))
+        .expect("le MP doit être listé pour bob");
+    assert_eq!(bdm["unread_count"].as_i64(), Some(0), "ses propres messages ne comptent pas");
+}

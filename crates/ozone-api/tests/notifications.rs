@@ -313,3 +313,78 @@ async fn notification_settings_crud() {
     .await;
     assert_eq!(list.as_array().unwrap().len(), 2);
 }
+
+/// `unread_count` par MP : compte les messages de l'AUTRE après le dernier lu, exclut les siens,
+/// se remet à zéro à la lecture. C'est ce qui alimente le badge numérique par MP dans le rail.
+#[tokio::test]
+async fn unread_count_per_dm() {
+    let app = app().await;
+    let alice = token(&app, "alice", "alice@unread.fr").await;
+    let bob = token(&app, "bob", "bob@unread.fr").await;
+    let bob_id = uid(&app, &bob).await;
+
+    // Alice ouvre le MP avec Bob.
+    let (_, ch) = send(
+        &app,
+        "POST",
+        "/users/@me/channels",
+        Some(json!({ "recipients": [bob_id] })),
+        Some(&alice),
+    )
+    .await;
+    let cid = ch["id"].as_str().unwrap().to_string();
+
+    // Trouve l'état de lecture d'Alice pour ce salon dans /read-states.
+    async fn unread(app: &Router, tok: &str, cid: &str) -> i64 {
+        let (_, list) = send(app, "GET", "/users/@me/read-states", None, Some(tok)).await;
+        list.as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["channel_id"].as_str() == Some(cid))
+            .map(|r| r["unread_count"].as_i64().unwrap_or(-1))
+            .unwrap_or(0)
+    }
+
+    // Bob écrit un 1er message, Alice le lit (crée son read_state).
+    let (_, m1) = send(
+        &app,
+        "POST",
+        &format!("/channels/{cid}/messages"),
+        Some(json!({ "content": "1" })),
+        Some(&bob),
+    )
+    .await;
+    let m1id = m1["id"].as_str().unwrap().to_string();
+    send(&app, "POST", &format!("/channels/{cid}/messages/{m1id}/ack"), None, Some(&alice)).await;
+    assert_eq!(unread(&app, &alice, &cid).await, 0, "tout lu après ack");
+
+    // Bob écrit 3 messages de plus → 3 non-lus pour Alice.
+    let mut last = m1id;
+    for i in 2..=4 {
+        let (_, m) = send(
+            &app,
+            "POST",
+            &format!("/channels/{cid}/messages"),
+            Some(json!({ "content": i.to_string() })),
+            Some(&bob),
+        )
+        .await;
+        last = m["id"].as_str().unwrap().to_string();
+    }
+    assert_eq!(unread(&app, &alice, &cid).await, 3, "3 messages de Bob non lus");
+
+    // Alice répond : ses PROPRES messages ne comptent jamais comme non-lus.
+    send(
+        &app,
+        "POST",
+        &format!("/channels/{cid}/messages"),
+        Some(json!({ "content": "moi" })),
+        Some(&alice),
+    )
+    .await;
+    assert_eq!(unread(&app, &alice, &cid).await, 3, "ses propres messages ne comptent pas");
+
+    // Alice lit jusqu'au dernier message de Bob → plus rien de non-lu.
+    send(&app, "POST", &format!("/channels/{cid}/messages/{last}/ack"), None, Some(&alice)).await;
+    assert_eq!(unread(&app, &alice, &cid).await, 0, "remis à zéro à la lecture");
+}

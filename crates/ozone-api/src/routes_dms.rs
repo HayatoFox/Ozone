@@ -37,7 +37,7 @@ async fn is_recipient(st: &AppState, cid: i64, uid: i64) -> AppResult<bool> {
     )
 }
 
-async fn build_dm_channel(st: &AppState, cid: i64) -> AppResult<DMChannel> {
+async fn build_dm_channel(st: &AppState, cid: i64, uid: i64) -> AppResult<DMChannel> {
     let row = sqlx::query("SELECT type, name, owner_id FROM channels WHERE id = ?")
         .bind(cid)
         .fetch_optional(&st.pool)
@@ -76,6 +76,21 @@ async fn build_dm_channel(st: &AppState, cid: i64) -> AppResult<DMChannel> {
         .await?
         .get("m");
 
+    // Messages non lus PAR `uid` : postérieurs à son dernier lu (0 s'il n'a jamais lu) et pas de lui.
+    // Couvre les MP jamais ouverts (pas encore de read_state) → badge numérique fiable pour chaque MP.
+    let unread_count: i64 = sqlx::query(
+        "SELECT COUNT(*) AS c FROM messages \
+         WHERE channel_id = ? AND author_id != ? \
+           AND id > COALESCE((SELECT last_read_id FROM read_states WHERE user_id = ? AND channel_id = ?), 0)",
+    )
+    .bind(cid)
+    .bind(uid)
+    .bind(uid)
+    .bind(cid)
+    .fetch_one(&st.pool)
+    .await?
+    .get("c");
+
     Ok(DMChannel {
         id: Snowflake::from_i64(cid),
         kind,
@@ -83,6 +98,7 @@ async fn build_dm_channel(st: &AppState, cid: i64) -> AppResult<DMChannel> {
         owner_id: owner_id.map(Snowflake::from_i64),
         recipients,
         last_message_id: last.map(Snowflake::from_i64),
+        unread_count,
     })
 }
 
@@ -157,7 +173,7 @@ pub async fn open_or_create_dm(
                 id.as_i64()
             }
         };
-        let ch = build_dm_channel(&st, cid).await?;
+        let ch = build_dm_channel(&st, cid, me).await?;
         if is_new {
             st.publish(
                 EventScope::Dm(cid),
@@ -185,7 +201,7 @@ pub async fn open_or_create_dm(
                 .execute(&st.pool)
                 .await?;
         }
-        let ch = build_dm_channel(&st, id.as_i64()).await?;
+        let ch = build_dm_channel(&st, id.as_i64(), me).await?;
         st.publish(
             EventScope::Dm(id.as_i64()),
             "CHANNEL_CREATE",
@@ -207,7 +223,7 @@ pub async fn list_dm_channels(
         .await?;
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
-        out.push(build_dm_channel(&st, r.get::<i64, _>("channel_id")).await?);
+        out.push(build_dm_channel(&st, r.get::<i64, _>("channel_id"), me).await?);
     }
     out.sort_by(|a, b| {
         let bl = b.last_message_id.map(|s| s.get()).unwrap_or(0);

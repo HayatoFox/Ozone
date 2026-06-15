@@ -70,7 +70,9 @@ export function ServerRail() {
                   .map((u) => u.display_name || u.username)
                   .join(", ") ||
                 "MP";
-              const count = readStates[d.id]?.mention_count ?? 0;
+              // Badge numérique = nombre de messages non lus de CE MP (calculé serveur + temps réel),
+              // pas seulement les mentions — fiable même pour un MP jamais ouvert.
+              const count = d.unread_count ?? 0;
               return (
                 <div key={d.id} className="group relative flex w-full items-center justify-center">
                   {/* Pastille blanche « non-lu » (demi-cercle qui s'allonge au survol), à gauche de l'avatar. */}

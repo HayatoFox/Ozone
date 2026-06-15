@@ -19,8 +19,12 @@ use sqlx::Row;
 
 async fn read_state_of(st: &AppState, uid: i64, cid: i64) -> AppResult<ReadState> {
     let row = sqlx::query(
-        "SELECT last_read_id, mention_count FROM read_states WHERE user_id = ? AND channel_id = ?",
+        "SELECT last_read_id, mention_count, \
+         (SELECT COUNT(*) FROM messages m WHERE m.channel_id = ? AND m.id > read_states.last_read_id AND m.author_id != ?) AS unread_count \
+         FROM read_states WHERE user_id = ? AND channel_id = ?",
     )
+    .bind(cid)
+    .bind(uid)
     .bind(uid)
     .bind(cid)
     .fetch_optional(&st.pool)
@@ -32,7 +36,8 @@ async fn read_state_of(st: &AppState, uid: i64, cid: i64) -> AppResult<ReadState
                 .map(|r| r.get::<i64, _>("last_read_id"))
                 .unwrap_or(0),
         ),
-        mention_count: row.map(|r| r.get::<i64, _>("mention_count")).unwrap_or(0),
+        mention_count: row.as_ref().map(|r| r.get::<i64, _>("mention_count")).unwrap_or(0),
+        unread_count: row.map(|r| r.get::<i64, _>("unread_count")).unwrap_or(0),
     })
 }
 
@@ -69,10 +74,16 @@ pub async fn list_read_states(
     State(st): State<AppState>,
     user: AuthUser,
 ) -> AppResult<Json<Vec<ReadState>>> {
+    // `unread_count` = nombre de messages postérieurs au dernier lu (sous-requête corrélée ; l'index
+    // PK sur messages.id + l'index channel_id rendent le COUNT efficace). Sert au badge numérique par MP.
+    let uid = user.id.as_i64();
     let rows = sqlx::query(
-        "SELECT channel_id, last_read_id, mention_count FROM read_states WHERE user_id = ?",
+        "SELECT rs.channel_id, rs.last_read_id, rs.mention_count, \
+         (SELECT COUNT(*) FROM messages m WHERE m.channel_id = rs.channel_id AND m.id > rs.last_read_id AND m.author_id != ?) AS unread_count \
+         FROM read_states rs WHERE rs.user_id = ?",
     )
-    .bind(user.id.as_i64())
+    .bind(uid)
+    .bind(uid)
     .fetch_all(&st.pool)
     .await?;
     Ok(Json(
@@ -81,6 +92,7 @@ pub async fn list_read_states(
                 channel_id: Snowflake::from_i64(r.get::<i64, _>("channel_id")),
                 last_read_id: Snowflake::from_i64(r.get::<i64, _>("last_read_id")),
                 mention_count: r.get::<i64, _>("mention_count"),
+                unread_count: r.get::<i64, _>("unread_count"),
             })
             .collect(),
     ))
