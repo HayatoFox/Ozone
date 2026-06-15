@@ -48,6 +48,22 @@ fn sanitize_color_style(s: Option<&str>) -> &'static str {
     }
 }
 
+/// Garde de hiérarchie : l'acteur doit posséder un rôle **strictement au-dessus** de `role_pos`
+/// (le propriétaire a `highest_role_position = i32::MAX`, donc jamais contraint). Sinon `403`.
+async fn require_role_below(
+    st: &AppState,
+    gid: i64,
+    owner: i64,
+    actor_uid: i64,
+    role_pos: i32,
+) -> AppResult<()> {
+    let actor_pos = pg::highest_role_position(&st.pool, gid, owner, actor_uid).await?;
+    if actor_pos <= role_pos {
+        return Err(AppError::forbidden("ce rôle est au-dessus ou égal au vôtre"));
+    }
+    Ok(())
+}
+
 async fn fetch_role(st: &AppState, gid: i64, rid: i64) -> AppResult<SqliteRow> {
     sqlx::query("SELECT * FROM roles WHERE id = ? AND guild_id = ?")
         .bind(rid)
@@ -155,12 +171,7 @@ pub async fn update_role(
     let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let role = fetch_role(&st, gid, rid).await?;
     let role_pos = role.get::<i64, _>("position") as i32;
-    let actor_pos = pg::highest_role_position(&st.pool, gid, owner, user.id.as_i64()).await?;
-    if actor_pos <= role_pos {
-        return Err(AppError::forbidden(
-            "ce rôle est au-dessus ou égal au vôtre",
-        ));
-    }
+    require_role_below(&st, gid, owner, user.id.as_i64(), role_pos).await?;
 
     let name: String = req.name.unwrap_or_else(|| role.get("name"));
     let color = req
@@ -330,12 +341,7 @@ pub async fn delete_role(
     let role = fetch_role(&st, gid, rid).await?;
     let role_pos = role.get::<i64, _>("position") as i32;
     let role_name: String = role.get("name");
-    let actor_pos = pg::highest_role_position(&st.pool, gid, owner, user.id.as_i64()).await?;
-    if actor_pos <= role_pos {
-        return Err(AppError::forbidden(
-            "ce rôle est au-dessus ou égal au vôtre",
-        ));
-    }
+    require_role_below(&st, gid, owner, user.id.as_i64(), role_pos).await?;
     sqlx::query("DELETE FROM roles WHERE id = ? AND guild_id = ?")
         .bind(rid)
         .bind(gid)
@@ -372,12 +378,7 @@ pub async fn add_member_role(
     let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let role = fetch_role(&st, gid, rid).await?;
     let role_pos = role.get::<i64, _>("position") as i32;
-    let actor_pos = pg::highest_role_position(&st.pool, gid, owner, user.id.as_i64()).await?;
-    if actor_pos <= role_pos {
-        return Err(AppError::forbidden(
-            "ce rôle est au-dessus ou égal au vôtre",
-        ));
-    }
+    require_role_below(&st, gid, owner, user.id.as_i64(), role_pos).await?;
     let is_member = sqlx::query("SELECT 1 FROM guild_members WHERE guild_id = ? AND user_id = ?")
         .bind(gid)
         .bind(target)
@@ -418,12 +419,7 @@ pub async fn remove_member_role(
     let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let role = fetch_role(&st, gid, rid).await?;
     let role_pos = role.get::<i64, _>("position") as i32;
-    let actor_pos = pg::highest_role_position(&st.pool, gid, owner, user.id.as_i64()).await?;
-    if actor_pos <= role_pos {
-        return Err(AppError::forbidden(
-            "ce rôle est au-dessus ou égal au vôtre",
-        ));
-    }
+    require_role_below(&st, gid, owner, user.id.as_i64(), role_pos).await?;
     sqlx::query("DELETE FROM member_roles WHERE guild_id = ? AND user_id = ? AND role_id = ?")
         .bind(gid)
         .bind(target)

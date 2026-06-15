@@ -7,7 +7,7 @@ use crate::extract::AuthUser;
 use crate::permissions as pg;
 use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
-use axum::body::Body;
+use axum::body::{Body, Bytes};
 use axum::extract::{Multipart, Path, State};
 use axum::http::header;
 use axum::response::Response;
@@ -48,6 +48,29 @@ fn image_content_type(ctype: &str) -> header::HeaderValue {
         "image/jpeg" => "image/jpeg",
         _ => "application/octet-stream",
     })
+}
+
+/// Lit le **premier champ « fichier »** d'un corps multipart et renvoie ses octets.
+/// `400` si le multipart est invalide, si la lecture échoue, ou si aucun fichier n'est fourni.
+/// L'appelant applique ensuite ses propres validations (taille, format) propres à l'endpoint.
+async fn read_one_upload(multipart: &mut Multipart) -> AppResult<Bytes> {
+    let mut data = None;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|_| AppError::bad_request("requête multipart invalide"))?
+    {
+        if field.file_name().is_some() {
+            data = Some(
+                field
+                    .bytes()
+                    .await
+                    .map_err(|_| AppError::bad_request("lecture du fichier échouée"))?,
+            );
+            break;
+        }
+    }
+    data.ok_or_else(|| AppError::bad_request("aucun fichier fourni"))
 }
 
 /// Écrit `data` dans un nouveau fichier d'upload (nom = id Snowflake) et renvoie l'id généré.
@@ -263,23 +286,7 @@ pub async fn upload_emoji_image(
     let gid = parse_i64(&gid)?;
     pg::require_expression_create(&st.pool, gid, user.id.as_i64()).await?;
 
-    let mut data = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| AppError::bad_request("requête multipart invalide"))?
-    {
-        if field.file_name().is_some() {
-            data = Some(
-                field
-                    .bytes()
-                    .await
-                    .map_err(|_| AppError::bad_request("lecture du fichier échouée"))?,
-            );
-            break;
-        }
-    }
-    let data = data.ok_or_else(|| AppError::bad_request("aucun fichier fourni"))?;
+    let data = read_one_upload(&mut multipart).await?;
     if data.is_empty() {
         return Err(AppError::bad_request("fichier vide"));
     }
@@ -308,23 +315,7 @@ pub async fn upload_sticker_image(
     let gid = parse_i64(&gid)?;
     pg::require_expression_create(&st.pool, gid, user.id.as_i64()).await?;
 
-    let mut data = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| AppError::bad_request("requête multipart invalide"))?
-    {
-        if field.file_name().is_some() {
-            data = Some(
-                field
-                    .bytes()
-                    .await
-                    .map_err(|_| AppError::bad_request("lecture du fichier échouée"))?,
-            );
-            break;
-        }
-    }
-    let data = data.ok_or_else(|| AppError::bad_request("aucun fichier fourni"))?;
+    let data = read_one_upload(&mut multipart).await?;
     if data.is_empty() {
         return Err(AppError::bad_request("fichier vide"));
     }
@@ -424,23 +415,7 @@ pub async fn upload_guild_image(
     let gid = parse_i64(&gid)?;
     pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_GUILD).await?;
 
-    let mut data = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| AppError::bad_request("requête multipart invalide"))?
-    {
-        if field.file_name().is_some() {
-            data = Some(
-                field
-                    .bytes()
-                    .await
-                    .map_err(|_| AppError::bad_request("lecture du fichier échouée"))?,
-            );
-            break;
-        }
-    }
-    let data = data.ok_or_else(|| AppError::bad_request("aucun fichier fourni"))?;
+    let data = read_one_upload(&mut multipart).await?;
     if data.is_empty() {
         return Err(AppError::bad_request("fichier vide"));
     }
@@ -500,23 +475,7 @@ pub async fn upload_sound_audio(
     let gid = parse_i64(&gid)?;
     pg::require_expression_create(&st.pool, gid, user.id.as_i64()).await?;
 
-    let mut data = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| AppError::bad_request("requête multipart invalide"))?
-    {
-        if field.file_name().is_some() {
-            data = Some(
-                field
-                    .bytes()
-                    .await
-                    .map_err(|_| AppError::bad_request("lecture du fichier échouée"))?,
-            );
-            break;
-        }
-    }
-    let data = data.ok_or_else(|| AppError::bad_request("aucun fichier fourni"))?;
+    let data = read_one_upload(&mut multipart).await?;
     if data.is_empty() {
         return Err(AppError::bad_request("fichier vide"));
     }
@@ -572,23 +531,7 @@ pub async fn upload_user_image(
     _user: AuthUser,
     mut multipart: Multipart,
 ) -> AppResult<Json<serde_json::Value>> {
-    let mut data = None;
-    while let Some(field) = multipart
-        .next_field()
-        .await
-        .map_err(|_| AppError::bad_request("requête multipart invalide"))?
-    {
-        if field.file_name().is_some() {
-            data = Some(
-                field
-                    .bytes()
-                    .await
-                    .map_err(|_| AppError::bad_request("lecture du fichier échouée"))?,
-            );
-            break;
-        }
-    }
-    let data = data.ok_or_else(|| AppError::bad_request("aucun fichier fourni"))?;
+    let data = read_one_upload(&mut multipart).await?;
     if data.is_empty() {
         return Err(AppError::bad_request("fichier vide"));
     }

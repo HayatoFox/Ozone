@@ -500,3 +500,70 @@ async fn soundboard_crud() {
         "tada ne doit plus apparaître dans la liste après suppression"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Test : l'upload d'image d'emoji lit le premier champ « fichier » (helper
+// `read_one_upload`) — couvre le chemin multipart factorisé (dédup ×5).
+// ---------------------------------------------------------------------------
+
+// Corps multipart. `filename = Some` ⇒ champ fichier ; `None` ⇒ champ sans nom de fichier.
+fn multipart_body(filename: Option<&str>, content: &[u8]) -> (String, Vec<u8>) {
+    let boundary = "OZONEEXPRBOUNDARY";
+    let mut body = Vec::new();
+    let disp = match filename {
+        Some(f) => format!(
+            "--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{f}\"\r\nContent-Type: image/png\r\n\r\n"
+        ),
+        None => format!("--{boundary}\r\nContent-Disposition: form-data; name=\"notafile\"\r\n\r\n"),
+    };
+    body.extend_from_slice(disp.as_bytes());
+    body.extend_from_slice(content);
+    body.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+    (format!("multipart/form-data; boundary={boundary}"), body)
+}
+
+async fn post_multipart(app: &Router, uri: &str, token: &str, ct: String, body: Vec<u8>) -> StatusCode {
+    let req = Request::builder()
+        .method("POST")
+        .uri(uri)
+        .header("authorization", format!("Bearer {token}"))
+        .header("content-type", ct)
+        .body(Body::from(body))
+        .unwrap();
+    app.clone().oneshot(req).await.unwrap().status()
+}
+
+#[tokio::test]
+async fn emoji_image_upload_reads_first_file() {
+    let app = app().await;
+    let alice = register(&app, "alice", "alice@x.fr").await;
+    let (status, guild) = send(
+        app.clone(),
+        rq("POST", "/guilds", Some(json!({"name": "G"})), Some(&alice)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "création de la guilde");
+    let gid = guild["id"].as_str().unwrap().to_string();
+    let uri = format!("/guilds/{gid}/emojis/image");
+
+    // Signature PNG (octets magiques) ⇒ `detect_image_type` accepte.
+    let png = [0x89u8, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A, 0, 0, 0, 0];
+
+    // Champ fichier présent ⇒ 200 + `image_id`.
+    let (ct, body) = multipart_body(Some("cat.png"), &png);
+    let req = Request::builder()
+        .method("POST")
+        .uri(&uri)
+        .header("authorization", format!("Bearer {alice}"))
+        .header("content-type", ct)
+        .body(Body::from(body))
+        .unwrap();
+    let (status, out) = send(app.clone(), req).await;
+    assert_eq!(status, StatusCode::OK, "upload d'image d'emoji");
+    assert!(out["image_id"].as_str().is_some(), "image_id renvoyé");
+
+    // Aucun champ fichier ⇒ 400 (chemin d'erreur de `read_one_upload`).
+    let (ct, body) = multipart_body(None, b"pas un fichier");
+    let status = post_multipart(&app, &uri, &alice, ct, body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "aucun fichier fourni ⇒ 400");
+}

@@ -1420,6 +1420,11 @@ régression d'auth / permission / routage.** **Bug pré-existant surfacé (hors 
 ne compilait plus dans le live (DTO `priv_wrapped`/`code` non répercutés aux tests) — le retrait du crate rend
 le workspace vert ; à noter pour le live si ces crates avaient été conservées.
 
+**Vague optionnelle (sur la branche `optim-dedup-cleanup`)** — deux dédups supplémentaires, **chacune avec un test dédié** :
+- `read_one_upload` (boucle de lecture multipart « 1er champ fichier » factorisée ×5, emojis/stickers/sons) : extraction pure, les validations par endpoint (taille/format) restent par site. Test `expressions::emoji_image_upload_reads_first_file` (fichier valide ⇒ `image_id` ; aucun champ fichier ⇒ 400).
+- `require_role_below` (garde de hiérarchie de rôle factorisée ×4 dans `routes_roles`) : **code de privilège** — extraction 1:1 à message d'erreur préservé. Test `permissions::role_hierarchy_guard_blocks_equal_or_higher` (gestionnaire de rôles bloqué sur un rôle ≥ au sien ⇒ 403 ; propriétaire non contraint ⇒ 200).
+- Différées faute d'infra de test sûre : factorisation du retrait de pistes relayées **SFU** (pas de banc d'essai WebRTC, chemin vocal critique) et câblage du composant `ui/Switch` (refonte purement visuelle, pas de tests de composants ; à valider par QA visuelle).
+
 ---
 **Dettes/risques identifiés à traiter (client web) :**
 - **R11 — Embeds de liens** : *embeds média directs* **implémentés en opt-in** (§75, OFF par défaut, consentement éclairé). L'**unfurling OG** (aperçus titre/description de pages) reste différé : nécessite une **récupération HTTPS côté serveur** (incompatible zéro-`ring` sans pile TLS pure-Rust) + garde **anti-SSRF**.
