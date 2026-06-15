@@ -421,3 +421,61 @@ async fn register_v2_relogin(app: &Router, login: &str, secret: &str) -> String 
     assert_eq!(st, StatusCode::OK);
     body["access_token"].as_str().unwrap().to_string()
 }
+
+/// 9. Code de récupération : configurer → prouver → réinitialiser le mot de passe + récupérer la clé.
+#[tokio::test]
+async fn recovery_flow() {
+    let app = app().await;
+    let tok = register_v2(&app, "alice", "alice@rec.fr", "AUTH_alice", "PUB_alice", "WRAP_alice").await;
+
+    // Configure le code de récupération (client : authSecret dérivé du code + clé emballée par sa KEK).
+    let (st, _) = send(
+        &app,
+        rq(
+            "PUT",
+            "/users/@me/recovery",
+            Some(json!({ "recovery_auth_secret": "REC_alice", "recovery_wrapped": "RECWRAP_alice" })),
+            Some(&tok),
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (_, enc) = send(&app, rq("GET", "/users/@me/encryption", None, Some(&tok))).await;
+    assert_eq!(enc["recovery_set"].as_bool(), Some(true), "le code de récupération est configuré");
+
+    // begin : mauvais code → 401 ; bon code → renvoie le coffre + le sel.
+    let (st, _) = send(
+        &app,
+        rq("POST", "/auth/recover/begin", Some(json!({"login":"alice","recovery_auth_secret":"MAUVAIS"})), None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::UNAUTHORIZED);
+    let (st, begin) = send(
+        &app,
+        rq("POST", "/auth/recover/begin", Some(json!({"login":"alice","recovery_auth_secret":"REC_alice"})), None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(begin["recovery_wrapped"].as_str(), Some("RECWRAP_alice"));
+    assert_eq!(begin["kdf_salt"].as_str(), Some("SALT_alice"));
+
+    // complete : réinitialise le mot de passe + dépose le nouvel escrow → nouveaux jetons.
+    let (st, _) = send(
+        &app,
+        rq(
+            "POST",
+            "/auth/recover/complete",
+            Some(json!({"login":"alice","recovery_auth_secret":"REC_alice","new_auth_secret":"NEWAUTH","new_priv_wrapped":"NEWWRAP"})),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "récupération a échoué");
+
+    // Désormais : nouveau authSecret OK, ancien REFUSÉ, escrow = le nouveau.
+    assert_eq!(login(&app, "alice", "NEWAUTH").await, StatusCode::OK);
+    assert_eq!(login(&app, "alice", "AUTH_alice").await, StatusCode::UNAUTHORIZED);
+    let tok2 = register_v2_relogin(&app, "alice", "NEWAUTH").await;
+    let (_, enc2) = send(&app, rq("GET", "/users/@me/encryption", None, Some(&tok2))).await;
+    assert_eq!(enc2["priv_wrapped"].as_str(), Some("NEWWRAP"), "clé ré-emballée sous la nouvelle KEK");
+}

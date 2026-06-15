@@ -1373,6 +1373,23 @@ Avant ce lot, la clé privée DM ne vivait qu'en `localStorage` ⇒ un autre app
 
 **Bilan** : persistance multi-appareils livrée **sans affaiblir la garantie** (l'admin ne peut pas lire) ; bug de perte de clé (génération au boot) corrigé ; migration v1→v2 **sans perte des MP existants**. **Aucune faille exploitable** introduite. Dettes : **code de récupération (Phase 2)**, E2EE des PJ, empreinte de clé anti-MITM.
 
+## 113. S113 — Code de récupération E2EE (mot de passe oublié) + style de pseudo + lecteur vidéo — **vérif adversariale**
+
+**Code de récupération (Phase 2, migration 0032, `routes_auth.rs`, `lib/e2ee.ts`)** — répond à la dette « mot de passe oublié » de §112 sans affaiblir la garantie E2EE.
+- **Modèle** : un code aléatoire (~98 bits, alphabet sans caractères ambigus, affiché **une seule fois**) sert de **second mot de passe**. Via la **même** machinerie que §112 (`deriveAuthKeys(code, sel)` → `recoveryAuthSecret` + `recoveryKEK`), on stocke `recovery_hash = Argon2(recoveryAuthSecret)` et `recovery_wrapped = AES-GCM(recoveryKEK, clé privée)` — un **2ᵉ coffre** de la clé privée. Le serveur ne voit jamais le code ni la KEK.
+- **Flux de récupération (2 étapes)** : `POST /auth/recover/begin {login, recovery_auth_secret}` → vérifie `Argon2(recovery_hash)` puis renvoie `{recovery_wrapped, kdf_salt}` (le coffre n'est exposé **qu'après** preuve du code) ; le client déballe avec la `recoveryKEK`, choisit un **nouveau mot de passe**, ré-emballe la clé sous la nouvelle KEK ; `POST /auth/recover/complete {login, recovery_auth_secret, new_auth_secret, new_priv_wrapped}` → re-vérifie, remplace `password_hash`, dépose le nouvel escrow, **révoque toutes les sessions**, émet de nouveaux jetons. Compte **et** MP récupérés.
+- **Anti-force-brute** : `begin`/`complete` **rate-limités par IP** (classe `LOGIN`) malgré la haute entropie du code ; erreurs **indifférenciées** (`401` « code invalide » pour compte inexistant, code absent, ou mauvais code → pas d'oracle). Bornes sur tous les blobs (≤ 8 Ko) et secrets (≤ 1 Ko).
+- **Régénération** : `PUT /users/@me/recovery` (authentifié) remplace l'ancien code (le précédent devient inopérant — un seul `recovery_hash`). UI : *Réglages → Compte → Code de récupération* (affichage unique + copie + avertissement) ; *écran de connexion → « Mot de passe oublié ? »* (identifiant + code + nouveau mot de passe).
+- **Limite** : sans le mot de passe **et** sans le code, les MP restent irrécupérables (par conception — c'est la garantie). Le code étant un équivalent de mot de passe, le perdre = même risque ; à conserver hors-ligne.
+
+**Style de pseudonyme (migration 0031)** : surface serveur = champ `users.name_style` (JSON) qui voyage sur l'objet `User`. **Borné** : effet en liste blanche (`uni|gradient|neon|cartoon|pop`), couleurs masquées 24 bits, police plafonnée. Aucune donnée sensible ; purement présentationnel. Le style **personnel prime** sur la couleur de rôle (cohérent, pas de fuite). Polices embarquées (woff2 statiques) — assets, aucune surface.
+
+**Lecteur vidéo** : client-only (contrôles custom sur `<video>` + lien `download` sur le blob bearer déjà en mémoire). **Aucune surface serveur** ; le blob reste récupéré via `fetch` authentifié (R12 inchangé).
+
+**Vérification** : `tests/e2ee.rs` **9/9** (dont `recovery_flow` : configurer → mauvais code 401 → bon code → réinitialisation + ré-emballage → ancien mdp refusé). Suite `cargo test -p ozone-api` complète au vert ; `cargo check --workspace`, `tsc`, **vitest 46/46**. Live : migration 0032 appliquée, endpoints `recover/*` + `recovery` **présents et gardés** (401), **round-trip crypto du code de récupération validé dans le navigateur** (génération → wrap → re-dérivation → unwrap = clé identique), aller-retour `name_style` OK, console sans erreur.
+
+**Bilan** : la dette « mot de passe oublié » de §112 est close — récupération de compte **et** de MP via un code haute-entropie, sans que l'admin puisse lire ; rate-limité, erreurs sans oracle. Style de pseudo et lecteur vidéo sans surface d'attaque notable. **Aucune faille exploitable** introduite. Dettes restantes : E2EE des **pièces jointes** de MP, **empreinte de clé** anti-MITM.
+
 ---
 **Dettes/risques identifiés à traiter (client web) :**
 - **R11 — Embeds de liens** : *embeds média directs* **implémentés en opt-in** (§75, OFF par défaut, consentement éclairé). L'**unfurling OG** (aperçus titre/description de pages) reste différé : nécessite une **récupération HTTPS côté serveur** (incompatible zéro-`ring` sans pile TLS pure-Rust) + garde **anti-SSRF**.

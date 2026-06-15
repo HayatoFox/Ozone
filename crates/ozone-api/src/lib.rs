@@ -83,6 +83,9 @@ pub fn build_app(state: AppState) -> Router {
         .route("/auth/register", post(routes_auth::register))
         .route("/auth/prelogin", post(routes_auth::prelogin))
         .route("/auth/login", post(routes_auth::login))
+        // Récupération E2EE (mot de passe oublié) via code de récupération.
+        .route("/auth/recover/begin", post(routes_auth::recover_begin))
+        .route("/auth/recover/complete", post(routes_auth::recover_complete))
         .route("/auth/token/refresh", post(routes_auth::refresh))
         .route(
             "/users/@me",
@@ -103,6 +106,7 @@ pub fn build_app(state: AppState) -> Router {
             "/users/@me/encryption/upgrade",
             post(routes_auth::upgrade_encryption),
         )
+        .route("/users/@me/recovery", put(routes_auth::set_recovery))
         .route("/users/@me/presence", put(routes_presence::set_presence))
         .route("/users/@me/password", patch(routes_auth::change_password))
         .route("/users/@me/email", patch(routes_auth::change_email))

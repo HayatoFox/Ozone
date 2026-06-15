@@ -1,12 +1,12 @@
 import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
 import { api, ApiError } from "../api";
-import { e2eeLogin, e2eeRegister } from "../lib/e2ee";
+import { e2eeLogin, e2eeRecover, e2eeRegister } from "../lib/e2ee";
 import { useStore } from "../store";
 import type { InstanceInfo } from "../types";
 import { Spinner } from "./ui/Spinner";
 
-type Mode = "login" | "register";
+type Mode = "login" | "register" | "recover";
 
 export function AuthScreen({ instance }: { instance: InstanceInfo | null }) {
   const afterAuth = useStore((s) => s.afterAuth);
@@ -22,6 +22,7 @@ export function AuthScreen({ instance }: { instance: InstanceInfo | null }) {
   const [displayNameField, setDisplayNameField] = useState("");
   const [gatePassword, setGatePassword] = useState("");
   const [inviteCode, setInviteCode] = useState("");
+  const [recoveryCode, setRecoveryCode] = useState("");
 
   const gateRequired = instance?.access_gate.required ?? false;
   const policy = instance?.registration_policy ?? "open";
@@ -38,6 +39,14 @@ export function AuthScreen({ instance }: { instance: InstanceInfo | null }) {
     setBusy(true);
     setError(null);
     try {
+      // Récupération par code : réinitialise le mot de passe + récupère la clé, puis pose les jetons.
+      if (mode === "recover") {
+        await e2eeRecover(login, recoveryCode, password);
+        const me = await api.me();
+        useStore.setState({ me, authed: true });
+        await afterAuth();
+        return;
+      }
       const gate_token = await obtainGateToken();
       // e2eeLogin/e2eeRegister dérivent l'authSecret + (dé)bloquent la clé DM, et posent les jetons.
       if (mode === "login") {
@@ -71,7 +80,11 @@ export function AuthScreen({ instance }: { instance: InstanceInfo | null }) {
             Oz
           </div>
           <h1 className="text-2xl font-bold text-header">
-            {mode === "login" ? "Content de te revoir !" : "Créer un compte"}
+            {mode === "login"
+              ? "Content de te revoir !"
+              : mode === "register"
+                ? "Créer un compte"
+                : "Récupérer mon compte"}
           </h1>
           <p className="mt-1 text-sm text-muted">
             {instance?.name ?? "Ozone"}
@@ -80,14 +93,7 @@ export function AuthScreen({ instance }: { instance: InstanceInfo | null }) {
         </div>
 
         <form onSubmit={submit} className="space-y-4">
-          {mode === "login" ? (
-            <Field
-              label="E-mail ou nom d'utilisateur"
-              value={login}
-              onChange={setLogin}
-              autoFocus
-            />
-          ) : (
+          {mode === "register" ? (
             <>
               <Field label="Nom d'utilisateur" value={username} onChange={setUsername} autoFocus />
               <Field label="E-mail" type="email" value={email} onChange={setEmail} />
@@ -101,11 +107,31 @@ export function AuthScreen({ instance }: { instance: InstanceInfo | null }) {
                 <Field label="Code d'invitation d'instance" value={inviteCode} onChange={setInviteCode} />
               )}
             </>
+          ) : (
+            <Field
+              label="E-mail ou nom d'utilisateur"
+              value={login}
+              onChange={setLogin}
+              autoFocus
+            />
           )}
 
-          <Field label="Mot de passe" type="password" value={password} onChange={setPassword} />
+          {mode === "recover" && (
+            <Field
+              label="Code de récupération"
+              value={recoveryCode}
+              onChange={setRecoveryCode}
+            />
+          )}
 
-          {gateRequired && (
+          <Field
+            label={mode === "recover" ? "Nouveau mot de passe" : "Mot de passe"}
+            type="password"
+            value={password}
+            onChange={setPassword}
+          />
+
+          {gateRequired && mode !== "recover" && (
             <Field
               label="Mot de passe de l'instance"
               type="password"
@@ -122,27 +148,46 @@ export function AuthScreen({ instance }: { instance: InstanceInfo | null }) {
             className="pressable inline-flex w-full items-center justify-center gap-2 rounded-lg btn-accent py-2.5 font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
             {busy && <Spinner size={16} />}
-            {mode === "login" ? "Connexion" : "Continuer"}
+            {mode === "login" ? "Connexion" : mode === "register" ? "Continuer" : "Réinitialiser le mot de passe"}
           </button>
 
           {mode === "login" ? (
-            canRegister && (
-              <p className="text-sm text-muted">
-                Besoin d'un compte ?{" "}
+            <div className="space-y-1 text-sm text-muted">
+              {canRegister && (
+                <p>
+                  Besoin d'un compte ?{" "}
+                  <button
+                    type="button"
+                    className="text-link hover:underline"
+                    onClick={() => {
+                      setMode("register");
+                      setError(null);
+                    }}
+                  >
+                    S'inscrire
+                  </button>
+                </p>
+              )}
+              <p>
                 <button
                   type="button"
                   className="text-link hover:underline"
                   onClick={() => {
-                    setMode("register");
+                    setMode("recover");
                     setError(null);
                   }}
                 >
-                  S'inscrire
+                  Mot de passe oublié ?
                 </button>
               </p>
-            )
+            </div>
           ) : (
             <p className="text-sm text-muted">
+              {mode === "recover" && (
+                <span className="mb-1 block text-xs">
+                  Saisis ton identifiant, ton code de récupération et un nouveau mot de passe.
+                </span>
+              )}
               <button
                 type="button"
                 className="inline-flex items-center gap-1 text-link hover:underline"

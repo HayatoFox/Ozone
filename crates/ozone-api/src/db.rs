@@ -35,7 +35,8 @@ pub async fn connect_and_migrate(db_path: &str) -> anyhow::Result<SqlitePool> {
     // 0028 (cycle de vie des fils : archivage/verrou/membres),
     // 0029 (chiffrement E2EE des MP : clé publique utilisateur + colonne cipher),
     // 0030 (escrow de clé privée DM + schéma d'auth zero-knowledge pour la persistance multi-appareils),
-    // 0031 (style de pseudonyme : police/effet/couleur, JSON, appliqué partout).
+    // 0031 (style de pseudonyme : police/effet/couleur, JSON, appliqué partout),
+    // 0032 (code de récupération E2EE : 2ᵉ coffre de la clé privée, pour mot de passe oublié).
     sqlx::migrate!("./migrations").run(&pool).await?;
     Ok(pool)
 }

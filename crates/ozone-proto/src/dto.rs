@@ -137,6 +137,36 @@ pub struct UpgradeEncryption {
     pub kdf_salt: String,
 }
 
+/// Dépôt du code de récupération E2EE : l'`authSecret` dérivé du code (le serveur en stocke un hash
+/// Argon2) + la clé privée DM emballée par la KEK dérivée du code.
+#[derive(Clone, Debug, Deserialize)]
+pub struct SetRecovery {
+    pub recovery_auth_secret: String,
+    pub recovery_wrapped: String,
+}
+
+/// Récupération — étape 1 : prouver le code, récupérer le coffre chiffré + le sel.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RecoverBegin {
+    pub login: String,
+    pub recovery_auth_secret: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct RecoverBeginResponse {
+    pub recovery_wrapped: String,
+    pub kdf_salt: String,
+}
+
+/// Récupération — étape 2 : réinitialiser le mot de passe + ré-emballer la clé sous la nouvelle KEK.
+#[derive(Clone, Debug, Deserialize)]
+pub struct RecoverComplete {
+    pub login: String,
+    pub recovery_auth_secret: String,
+    pub new_auth_secret: String,
+    pub new_priv_wrapped: String,
+}
+
 /// Matériel de chiffrement DM de l'utilisateur courant (clé publique + clé privée emballée).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct EncryptionKeys {
@@ -144,6 +174,9 @@ pub struct EncryptionKeys {
     pub priv_wrapped: Option<String>,
     /// Schéma d'auth du compte (2 = zero-knowledge/escrow actif, 1 = legacy à migrer).
     pub pw_scheme: u8,
+    /// Un code de récupération a-t-il été configuré ? (pour l'UI : « générer » vs « régénérer »).
+    #[serde(default)]
+    pub recovery_set: bool,
 }
 
 /// Changement d'e-mail (ré-authentification par le mot de passe).

@@ -306,15 +306,18 @@ pub async fn get_encryption(
     State(st): State<AppState>,
     user: AuthUser,
 ) -> AppResult<Json<EncryptionKeys>> {
-    let row = sqlx::query("SELECT dm_public_key, dm_priv_wrapped, pw_scheme FROM users WHERE id = ?")
-        .bind(user.id.as_i64())
-        .fetch_optional(&st.pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
+    let row = sqlx::query(
+        "SELECT dm_public_key, dm_priv_wrapped, pw_scheme, recovery_hash FROM users WHERE id = ?",
+    )
+    .bind(user.id.as_i64())
+    .fetch_optional(&st.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
     Ok(Json(EncryptionKeys {
         public_key: row.get("dm_public_key"),
         priv_wrapped: row.get("dm_priv_wrapped"),
         pw_scheme: row.get::<i64, _>("pw_scheme") as u8,
+        recovery_set: row.get::<Option<String>, _>("recovery_hash").is_some(),
     }))
 }
 

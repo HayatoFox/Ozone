@@ -56,6 +56,12 @@ export interface EncryptionKeys {
   public_key: string | null;
   priv_wrapped: string | null;
   pw_scheme: number;
+  recovery_set?: boolean;
+}
+
+export interface RecoverBeginResponse {
+  recovery_wrapped: string;
+  kdf_salt: string;
 }
 
 export interface UpgradeEncryption {

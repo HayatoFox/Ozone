@@ -51,6 +51,7 @@ import type {
   PresenceView,
   PublicKey,
   ReadState,
+  RecoverBeginResponse,
   UpgradeEncryption,
   RegisterRequest,
   SetNotificationSetting,
@@ -312,6 +313,17 @@ export const api = {
   getEncryption: () => get<EncryptionKeys>("/users/@me/encryption"),
   upgradeEncryption: (req: UpgradeEncryption) =>
     post<{ ok: boolean }>("/users/@me/encryption/upgrade", req),
+  // Code de récupération E2EE : dépôt (auth) + récupération (mot de passe oublié, non authentifiée).
+  setRecovery: (req: { recovery_auth_secret: string; recovery_wrapped: string }) =>
+    put<{ ok: boolean }>("/users/@me/recovery", req),
+  recoverBegin: (req: { login: string; recovery_auth_secret: string }) =>
+    request<RecoverBeginResponse>("/auth/recover/begin", { method: "POST", body: req, auth: false }),
+  recoverComplete: (req: {
+    login: string;
+    recovery_auth_secret: string;
+    new_auth_secret: string;
+    new_priv_wrapped: string;
+  }) => request<TokenPair>("/auth/recover/complete", { method: "POST", body: req, auth: false }),
   refresh: (refresh_token: string) =>
     request<TokenPair>("/auth/token/refresh", {
       method: "POST",

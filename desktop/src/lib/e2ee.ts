@@ -443,3 +443,84 @@ export async function e2eeChangePassword(
     priv_wrapped,
   });
 }
+
+// ───────────────────────────── Code de récupération (mot de passe oublié) ─────────────────────────────
+
+const RECOVERY_ALPHABET = "ABCDEFGHJKMNPQRSTVWXYZ23456789"; // sans I, L, O, U, 0, 1 (ambigus)
+
+/** Génère un code de récupération aléatoire (~98 bits), groupé en `XXXXX-XXXXX-XXXXX-XXXXX`. */
+export function generateRecoveryCode(): string {
+  const b = crypto.getRandomValues(new Uint8Array(20));
+  let s = "";
+  for (let i = 0; i < 20; i += 1) s += RECOVERY_ALPHABET[b[i] % RECOVERY_ALPHABET.length];
+  return (s.match(/.{1,5}/g) || [s]).join("-");
+}
+
+/** Normalise un code saisi (retire tirets/espaces, majuscules) pour la dérivation. */
+function normalizeRecovery(code: string): string {
+  return code.replace(/[^a-zA-Z0-9]/g, "").toUpperCase();
+}
+
+/**
+ * Active/régénère le code de récupération : dépose un 2ᵉ coffre de la clé privée, emballé par une KEK
+ * dérivée du code. Renvoie le code à AFFICHER UNE SEULE FOIS (jamais stocké en clair côté serveur).
+ */
+export async function setupRecovery(): Promise<string> {
+  if (!e2eeAvailable()) throw new Error("Chiffrement indisponible sur cet appareil.");
+  const salt = localStorage.getItem(SALT_STORAGE);
+  const privRaw = localStorage.getItem(PRIV_KEY_STORAGE);
+  if (!salt || !privRaw) {
+    throw new Error("Reconnecte-toi pour activer la récupération (clé locale absente).");
+  }
+  const privJwk: JsonWebKey = JSON.parse(privRaw);
+  const code = generateRecoveryCode();
+  const { authSecret, kek } = await deriveAuthKeys(normalizeRecovery(code), salt);
+  const recovery_wrapped = await wrapPrivateKey(kek, privJwk);
+  await api.setRecovery({ recovery_auth_secret: authSecret, recovery_wrapped });
+  return code;
+}
+
+/**
+ * Récupération (mot de passe oublié) : prouve le code, déballe la clé via la KEK du code, définit un
+ * nouveau mot de passe et ré-emballe la clé sous la nouvelle KEK. Pose les jetons et installe la clé.
+ */
+export async function e2eeRecover(
+  login: string,
+  recoveryCode: string,
+  newPassword: string,
+): Promise<TokenPair> {
+  if (!e2eeAvailable()) throw new Error("Chiffrement indisponible sur cet appareil.");
+  const norm = normalizeRecovery(recoveryCode);
+  const { kdf_salt } = await api.prelogin(login);
+  const rec = await deriveAuthKeys(norm, kdf_salt);
+  let begin;
+  try {
+    begin = await api.recoverBegin({ login, recovery_auth_secret: rec.authSecret });
+  } catch {
+    throw new Error("Identifiant ou code de récupération incorrect.");
+  }
+  let privJwk: JsonWebKey;
+  try {
+    privJwk = await unwrapPrivateKey(rec.kek, begin.recovery_wrapped);
+  } catch {
+    throw new Error("Code de récupération incorrect.");
+  }
+  const next = await deriveAuthKeys(newPassword, kdf_salt);
+  const new_priv_wrapped = await wrapPrivateKey(next.kek, privJwk);
+  const tokens = await api.recoverComplete({
+    login,
+    recovery_auth_secret: rec.authSecret,
+    new_auth_secret: next.authSecret,
+    new_priv_wrapped,
+  });
+  setTokens(tokens);
+  // Installe la clé récupérée (clé publique inchangée → relue depuis l'escrow).
+  try {
+    const enc = await api.getEncryption();
+    if (enc.public_key) await installPrivateKey(privJwk, enc.public_key);
+  } catch {
+    /* sera rechargée au prochain unlock */
+  }
+  localStorage.setItem(SALT_STORAGE, kdf_salt);
+  return tokens;
+}

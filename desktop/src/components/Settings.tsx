@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bell, Headphones, KeyRound, LogOut, Mail, Palette, ShieldCheck, Trash2, Upload, UserRound, X } from "lucide-react";
 import { api, ApiError } from "../api";
-import { e2eeChangePassword } from "../lib/e2ee";
+import { e2eeChangePassword, setupRecovery } from "../lib/e2ee";
 import {
   NAME_EFFECTS,
   NAME_FONT_COUNT,
@@ -180,7 +180,7 @@ function SubTitle({ children }: { children: React.ReactNode }) {
 function AccountSection() {
   const me = useStore((s) => s.me);
   const logout = useStore((s) => s.logout);
-  const [modal, setModal] = useState<null | "password" | "email" | "delete">(null);
+  const [modal, setModal] = useState<null | "password" | "email" | "delete" | "recovery">(null);
   if (!me) return null;
 
   return (
@@ -208,6 +208,13 @@ function AccountSection() {
           <Mail size={16} />
           Modifier l'e-mail
         </button>
+        <button
+          onClick={() => setModal("recovery")}
+          className="flex items-center gap-2 self-start rounded bg-field px-4 py-2 text-sm font-medium text-normal hover:bg-hover"
+        >
+          <ShieldCheck size={16} />
+          Code de récupération (MP chiffrés)
+        </button>
       </div>
 
       <div className="my-6 h-px bg-line" />
@@ -230,7 +237,107 @@ function AccountSection() {
       {modal === "password" && <ChangePasswordModal onClose={() => setModal(null)} />}
       {modal === "email" && <ChangeEmailModal onClose={() => setModal(null)} />}
       {modal === "delete" && <DeleteAccountModal onClose={() => setModal(null)} />}
+      {modal === "recovery" && <RecoveryModal onClose={() => setModal(null)} />}
     </>
+  );
+}
+
+// Code de récupération E2EE : générer/régénérer + afficher le code UNE SEULE FOIS.
+function RecoveryModal({ onClose }: { onClose: () => void }) {
+  const [already, setAlready] = useState<boolean | null>(null);
+  const [code, setCode] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    api
+      .getEncryption()
+      .then((e) => alive && setAlready(!!e.recovery_set))
+      .catch(() => alive && setAlready(false));
+    return () => {
+      alive = false;
+    };
+  }, []);
+
+  async function generate() {
+    setBusy(true);
+    setError(null);
+    try {
+      setCode(await setupRecovery());
+      setAlready(true);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "Échec.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <Modal onClose={onClose}>
+      <div className="w-[440px] rounded-xl bg-modal p-6 ring-1 ring-cardline surface-card">
+        <h2 className="mb-1 text-xl font-bold text-header">Code de récupération</h2>
+        <p className="mb-4 text-sm text-muted">
+          Si tu oublies ton mot de passe, ce code te permet de retrouver l'accès à ton compte ET à tes
+          messages chiffrés. Le serveur ne peut pas le lire. Note-le et garde-le en lieu sûr.
+        </p>
+
+        {code ? (
+          <>
+            <div className="mb-2 flex items-center gap-2 rounded-lg bg-deepest px-3 py-3 font-mono text-lg tracking-wider text-header">
+              <span className="flex-1 select-all break-all">{code}</span>
+              <button
+                onClick={() => {
+                  void navigator.clipboard?.writeText(code);
+                  setCopied(true);
+                }}
+                className="shrink-0 rounded bg-field px-2 py-1 text-xs font-medium text-normal hover:bg-hover"
+              >
+                {copied ? "Copié" : "Copier"}
+              </button>
+            </div>
+            <p className="mb-4 text-xs text-dnd">
+              ⚠️ Ce code ne sera plus jamais affiché. Copie-le maintenant.
+            </p>
+            <div className="flex justify-end">
+              <button
+                onClick={onClose}
+                className="rounded-lg btn-accent px-5 py-2 text-sm font-medium text-white"
+              >
+                J'ai noté mon code
+              </button>
+            </div>
+          </>
+        ) : (
+          <>
+            {already && (
+              <p className="mb-3 rounded bg-field px-3 py-2 text-sm text-normal">
+                Un code de récupération est déjà actif. En générer un nouveau{" "}
+                <span className="font-semibold">invalide l'ancien</span>.
+              </p>
+            )}
+            {error && <p className="mb-3 text-sm text-dnd">{error}</p>}
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={onClose}
+                className="rounded-lg px-4 py-2 text-sm text-normal hover:bg-hover"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={() => void generate()}
+                disabled={busy || already === null}
+                className="inline-flex items-center gap-2 rounded-lg btn-accent px-5 py-2 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {busy && <Spinner size={14} />}
+                {already ? "Générer un nouveau code" : "Générer un code"}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </Modal>
   );
 }
 

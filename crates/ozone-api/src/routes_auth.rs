@@ -11,7 +11,8 @@ use axum::extract::State;
 use axum::Json;
 use ozone_proto::dto::{
     ChangeEmail, ChangePassword, DeleteAccount, LoginRequest, PreloginRequest, PreloginResponse,
-    RefreshRequest, RegisterRequest, RegistrationPolicy, TokenPair, UpgradeEncryption, User,
+    RecoverBegin, RecoverBeginResponse, RecoverComplete, RefreshRequest, RegisterRequest,
+    RegistrationPolicy, SetRecovery, TokenPair, UpgradeEncryption, User,
 };
 use ozone_proto::Snowflake;
 use sqlx::Row;
@@ -449,6 +450,111 @@ pub async fn upgrade_encryption(
     .execute(&st.pool)
     .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `PUT /users/@me/recovery` — (re)configure le code de récupération E2EE (2ᵉ coffre de la clé privée).
+pub async fn set_recovery(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<SetRecovery>,
+) -> AppResult<Json<serde_json::Value>> {
+    if req.recovery_auth_secret.is_empty()
+        || req.recovery_auth_secret.len() > 1024
+        || req.recovery_wrapped.is_empty()
+        || req.recovery_wrapped.len() > 8192
+    {
+        return Err(AppError::bad_request("matériel de récupération invalide"));
+    }
+    let hash = crypto::hash_password(&req.recovery_auth_secret).map_err(AppError::internal)?;
+    sqlx::query("UPDATE users SET recovery_hash = ?, recovery_wrapped = ? WHERE id = ?")
+        .bind(&hash)
+        .bind(&req.recovery_wrapped)
+        .bind(user.id.as_i64())
+        .execute(&st.pool)
+        .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `POST /auth/recover/begin` — prouve le code de récupération, renvoie le coffre chiffré + le sel.
+/// Rate-limité par IP (anti-force-brute du code malgré sa haute entropie). Erreurs indifférenciées.
+pub async fn recover_begin(
+    State(st): State<AppState>,
+    ClientIp(ip): ClientIp,
+    Json(req): Json<RecoverBegin>,
+) -> AppResult<Json<RecoverBeginResponse>> {
+    st.rate
+        .check(ratelimit::LOGIN, &ip)
+        .map_err(AppError::rate_limited)?;
+    let login = req.login.trim().to_lowercase();
+    let fail = || AppError::unauthorized("code de récupération invalide");
+    let row = sqlx::query(
+        "SELECT recovery_hash, recovery_wrapped, kdf_salt FROM users WHERE username = ? OR email = ?",
+    )
+    .bind(&login)
+    .bind(&login)
+    .fetch_optional(&st.pool)
+    .await?
+    .ok_or_else(fail)?;
+    let (Some(hash), Some(wrapped), Some(salt)) = (
+        row.get::<Option<String>, _>("recovery_hash"),
+        row.get::<Option<String>, _>("recovery_wrapped"),
+        row.get::<Option<String>, _>("kdf_salt"),
+    ) else {
+        return Err(fail());
+    };
+    if !crypto::verify_password(&req.recovery_auth_secret, &hash) {
+        return Err(fail());
+    }
+    Ok(Json(RecoverBeginResponse {
+        recovery_wrapped: wrapped,
+        kdf_salt: salt,
+    }))
+}
+
+/// `POST /auth/recover/complete` — réinitialise le mot de passe (nouvel `authSecret`) et ré-emballe la
+/// clé privée sous la nouvelle KEK, puis révoque les sessions et émet de nouveaux jetons.
+pub async fn recover_complete(
+    State(st): State<AppState>,
+    ClientIp(ip): ClientIp,
+    Json(req): Json<RecoverComplete>,
+) -> AppResult<Json<TokenPair>> {
+    st.rate
+        .check(ratelimit::LOGIN, &ip)
+        .map_err(AppError::rate_limited)?;
+    let login = req.login.trim().to_lowercase();
+    let fail = || AppError::unauthorized("code de récupération invalide");
+    let row = sqlx::query("SELECT id, recovery_hash FROM users WHERE username = ? OR email = ?")
+        .bind(&login)
+        .bind(&login)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(fail)?;
+    let uid: i64 = row.get("id");
+    let Some(hash) = row.get::<Option<String>, _>("recovery_hash") else {
+        return Err(fail());
+    };
+    if !crypto::verify_password(&req.recovery_auth_secret, &hash) {
+        return Err(fail());
+    }
+    if req.new_auth_secret.is_empty()
+        || req.new_auth_secret.len() > 1024
+        || req.new_priv_wrapped.is_empty()
+        || req.new_priv_wrapped.len() > 8192
+    {
+        return Err(AppError::bad_request("matériel invalide"));
+    }
+    let new_hash = crypto::hash_password(&req.new_auth_secret).map_err(AppError::internal)?;
+    sqlx::query("UPDATE users SET password_hash = ?, pw_scheme = 2, dm_priv_wrapped = ? WHERE id = ?")
+        .bind(&new_hash)
+        .bind(&req.new_priv_wrapped)
+        .bind(uid)
+        .execute(&st.pool)
+        .await?;
+    sqlx::query("DELETE FROM sessions WHERE user_id = ?")
+        .bind(uid)
+        .execute(&st.pool)
+        .await?;
+    Ok(Json(issue_tokens(&st, Snowflake::from_i64(uid)).await?))
 }
 
 /// `POST /auth/prelogin` — restitue le sel KDF + le schéma pour un identifiant, AVANT le login, afin
