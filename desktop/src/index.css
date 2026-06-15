@@ -505,32 +505,33 @@
     }
   }
 
-  /* ── Style de pseudonyme : polices (familles système, pas de téléchargement) ── */
+  /* ── Style de pseudonyme : polices embarquées (woff2, poids 400, latin) ── */
   .name-font-serif {
-    font-family: Georgia, "Times New Roman", serif;
+    font-family: "Lora", Georgia, "Times New Roman", serif;
   }
   .name-font-mono {
-    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    font-family: "JetBrains Mono", ui-monospace, "Cascadia Code", "Consolas", monospace;
     letter-spacing: -0.3px;
   }
   .name-font-round {
-    font-family: "Segoe UI Rounded", "SF Pro Rounded", ui-rounded, "Quicksand", system-ui;
+    font-family: "Comfortaa", "Segoe UI Rounded", ui-rounded, system-ui;
   }
   .name-font-display {
-    font-family: "Trebuchet MS", "Segoe UI", system-ui;
-    font-weight: 800;
-    letter-spacing: 0.3px;
+    /* Bungee : display tout en capitales, déjà épaisse → pas de bold synthétique. */
+    font-family: "Bungee", "Trebuchet MS", "Segoe UI", system-ui;
+    letter-spacing: 0.2px;
   }
   .name-font-hand {
-    font-family: "Segoe Script", "Bradley Hand", "Comic Sans MS", cursive;
+    /* Caveat rend petit : on remonte un peu la taille pour rester lisible inline. */
+    font-family: "Caveat", "Segoe Script", "Bradley Hand", cursive;
+    font-size: 1.12em;
   }
   .name-font-condensed {
-    font-family: "Arial Narrow", "Roboto Condensed", "Oswald", sans-serif;
-    letter-spacing: -0.2px;
+    font-family: "Oswald", "Arial Narrow", sans-serif;
+    letter-spacing: 0.1px;
   }
   .name-font-slab {
-    font-family: "Rockwell", "Roboto Slab", "Courier New", serif;
-    font-weight: 700;
+    font-family: "Roboto Slab", "Rockwell", "Courier New", serif;
   }
 
   /* ── Style de pseudonyme : effets « cartoon » (contour) et « pop » (relief autocollant) ── */
