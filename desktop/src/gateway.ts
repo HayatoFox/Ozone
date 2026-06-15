@@ -30,11 +30,6 @@ export interface GatewayHooks {
   onAuthLost?: () => void;
 }
 
-// URL WS de la Gateway : origine courante (web) ou instance configurée (.exe). Cf. lib/instance.
-function gatewayUrl(): string {
-  return gatewayWsUrl();
-}
-
 export class Gateway {
   private ws: WebSocket | null = null;
   private getToken: () => string | null;
@@ -71,7 +66,8 @@ export class Gateway {
 
   private open(): void {
     this.onStatus("connecting");
-    const ws = new WebSocket(gatewayUrl());
+    // URL WS de la Gateway : origine courante (web) ou instance configurée (.exe). Cf. lib/instance.
+    const ws = new WebSocket(gatewayWsUrl());
     this.ws = ws;
 
     ws.onmessage = (e) => this.handleMessage(e.data as string);

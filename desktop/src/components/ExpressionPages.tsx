@@ -6,6 +6,7 @@ import { Pencil, Play, Trash2, Upload } from "lucide-react";
 import { api } from "../api";
 import { useStore } from "../store";
 import { mediaUrl } from "../lib/instance";
+import { errText } from "../lib/format";
 import { staggerDelay } from "../lib/anim";
 import type { SoundboardSound, Sticker } from "../types";
 import { ImageCropModal } from "./ImageCropModal";
@@ -18,10 +19,6 @@ import {
   STICKER_CROP_PX,
   STICKER_MAX_BYTES,
 } from "../lib/imageUpload";
-
-function errText(e: unknown): string {
-  return e instanceof Error ? e.message : "Échec.";
-}
 
 // Renommage en place (nom → crayon → input, validation à Entrée/blur).
 export function InlineName({

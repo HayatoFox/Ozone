@@ -4,8 +4,6 @@ members = [
     "crates/ozone-proto",
     "crates/ozone-api",
     "crates/ozone-sfu",
-    "crates/ozone-core",
-    "crates/ozone-ui",
 ]
 
 [workspace.package]

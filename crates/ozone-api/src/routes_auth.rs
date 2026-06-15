@@ -337,22 +337,42 @@ pub async fn refresh(
 }
 
 /// `GET /users/@me`
-pub async fn me(State(st): State<AppState>, user: AuthUser) -> AppResult<Json<User>> {
+/// Charge le profil complet de l'utilisateur (avec e-mail) en `User`. 404 s'il a disparu.
+async fn fetch_user_with_email(st: &AppState, uid: i64) -> AppResult<User> {
     let row = sqlx::query(
         "SELECT id, username, display_name, avatar_id, email, name_style FROM users WHERE id = ?",
     )
-    .bind(user.id.as_i64())
+    .bind(uid)
     .fetch_optional(&st.pool)
     .await?
     .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
-    Ok(Json(User {
+    Ok(User {
         id: Snowflake::from_i64(row.get::<i64, _>("id")),
         username: row.get("username"),
         display_name: row.get("display_name"),
         avatar_id: row.get("avatar_id"),
         email: Some(row.get("email")),
         name_style: crate::util::parse_name_style(row.get("name_style")),
-    }))
+    })
+}
+
+/// Vérifie le mot de passe courant de l'utilisateur (ré-authentification) : 404 s'il a disparu,
+/// 401 si le mot de passe ne correspond pas.
+async fn reauth_password(st: &AppState, uid: i64, password: &str) -> AppResult<()> {
+    let hash: String = sqlx::query("SELECT password_hash FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?
+        .get("password_hash");
+    if !crypto::verify_password(password, &hash) {
+        return Err(AppError::unauthorized("mot de passe invalide"));
+    }
+    Ok(())
+}
+
+pub async fn me(State(st): State<AppState>, user: AuthUser) -> AppResult<Json<User>> {
+    Ok(Json(fetch_user_with_email(&st, user.id.as_i64()).await?))
 }
 
 /// `PATCH /users/@me/password` — change le mot de passe (ré-auth requise) et révoque les sessions.
@@ -603,15 +623,7 @@ pub async fn change_email(
     Json(req): Json<ChangeEmail>,
 ) -> AppResult<Json<User>> {
     let uid = user.id.as_i64();
-    let hash: String = sqlx::query("SELECT password_hash FROM users WHERE id = ?")
-        .bind(uid)
-        .fetch_optional(&st.pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?
-        .get("password_hash");
-    if !crypto::verify_password(&req.password, &hash) {
-        return Err(AppError::unauthorized("mot de passe invalide"));
-    }
+    reauth_password(&st, uid, &req.password).await?;
     let email = req.new_email.trim().to_lowercase();
     if !email.contains('@') || email.len() > 254 {
         return Err(AppError::bad_request("e-mail invalide"));
@@ -630,20 +642,7 @@ pub async fn change_email(
         .bind(uid)
         .execute(&st.pool)
         .await?;
-    let row = sqlx::query(
-        "SELECT id, username, display_name, avatar_id, email, name_style FROM users WHERE id = ?",
-    )
-    .bind(uid)
-    .fetch_one(&st.pool)
-    .await?;
-    Ok(Json(User {
-        id: Snowflake::from_i64(row.get::<i64, _>("id")),
-        username: row.get("username"),
-        display_name: row.get("display_name"),
-        avatar_id: row.get("avatar_id"),
-        email: Some(row.get("email")),
-        name_style: crate::util::parse_name_style(row.get("name_style")),
-    }))
+    Ok(Json(fetch_user_with_email(&st, uid).await?))
 }
 
 /// `DELETE /users/@me` — supprime (anonymise) son propre compte (ré-auth requise).
@@ -655,15 +654,7 @@ pub async fn delete_account(
     Json(req): Json<DeleteAccount>,
 ) -> AppResult<Json<serde_json::Value>> {
     let uid = user.id.as_i64();
-    let hash: String = sqlx::query("SELECT password_hash FROM users WHERE id = ?")
-        .bind(uid)
-        .fetch_optional(&st.pool)
-        .await?
-        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?
-        .get("password_hash");
-    if !crypto::verify_password(&req.password, &hash) {
-        return Err(AppError::unauthorized("mot de passe invalide"));
-    }
+    reauth_password(&st, uid, &req.password).await?;
     let owned: i64 = sqlx::query("SELECT COUNT(*) AS c FROM guilds WHERE owner_id = ?")
         .bind(uid)
         .fetch_one(&st.pool)

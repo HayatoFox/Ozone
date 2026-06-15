@@ -494,7 +494,7 @@ impl Sfu {
         // On ne fait AUCUN `.await` long (remove_track/close/send) sous le verrou : `pc.close()`
         // exécute INLINE le handler on_peer_connection_state_change qui re-appelle purge_peer →
         // 2e lock du Mutex non-réentrant → deadlock total du SFU. On libère donc le verrou avant.
-        let (gone, others, room_now_empty) = {
+        let (gone, others) = {
             let mut rooms = self.rooms.lock().await;
             let Some(room) = rooms.get_mut(room_id) else {
                 return false;
@@ -503,13 +503,12 @@ impl Sfu {
                 return false;
             };
             let others: Vec<Arc<Peer>> = room.peers.values().cloned().collect();
-            let empty = room.peers.is_empty();
-            if empty {
+            // La room est retirée immédiatement si elle devient vide.
+            if room.peers.is_empty() {
                 rooms.remove(room_id);
             }
-            (gone, others, empty)
+            (gone, others)
         }; // ← verrou `rooms` relâché ici
-        let _ = room_now_empty; // (la room a déjà été retirée si vide)
 
         // ── Phase 2 : hors verrou, on effectue les opérations asynchrones.
         // Ids des pistes que le partant publiait (pour les retirer chez les autres).

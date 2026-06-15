@@ -30,7 +30,7 @@ export function ChatSkeleton() {
               <Skeleton className="h-3.5 w-28" />
               <Skeleton className="h-2.5 w-16 opacity-60" />
             </div>
-            <Skeleton className="h-3 rounded" style={undefined} />
+            <Skeleton className="h-3 rounded" />
             <div style={{ width: w }}>
               <Skeleton className="mt-1.5 h-3" />
             </div>

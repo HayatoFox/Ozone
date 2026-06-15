@@ -5,7 +5,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
-use crate::state::{AppState, EventScope, HubEvent};
+use crate::state::{AppState, EventScope};
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
@@ -56,14 +56,6 @@ const MIN_BITRATE: i32 = 8_000;
 const MAX_BITRATE: i32 = 512_000; // on autorise bien plus que Discord (96 kbps)
 const MAX_USER_LIMIT: i32 = 99;
 const AUTO_ARCHIVE_VALUES: [i32; 4] = [60, 1_440, 4_320, 10_080]; // 1 h / 1 j / 3 j / 7 j
-
-fn emit(st: &AppState, scope: EventScope, t: &str, d: serde_json::Value) {
-    let _ = st.hub.send(HubEvent {
-        t: t.to_string(),
-        d,
-        scope,
-    });
-}
 
 fn row_to_guild(r: &SqliteRow) -> Guild {
     Guild {
@@ -423,9 +415,7 @@ pub async fn delete_guild(
     Path(guild_id): Path<String>,
 ) -> AppResult<Json<serde_json::Value>> {
     let gid = parse_i64(&guild_id)?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     if owner != user.id.as_i64() {
         return Err(AppError::forbidden(
             "seul le propriétaire peut supprimer la guilde",
@@ -573,8 +563,7 @@ pub async fn create_channel(
     crate::routes_moderation::audit_named(&st, gid, user.id.as_i64(), "channel_create", name).await;
 
     let ch = fetch_channel(&st, id.as_i64()).await?;
-    emit(
-        &st,
+    st.publish(
         EventScope::Channel {
             guild_id: gid,
             channel_id: id.as_i64(),
@@ -624,8 +613,7 @@ pub async fn sync_channel_permissions(
         parent.ok_or_else(|| AppError::bad_request("ce salon n'a pas de catégorie parente"))?;
     copy_parent_overwrites(&st, cid, parent).await?;
     let ch = fetch_channel(&st, cid).await?;
-    emit(
-        &st,
+    st.publish(
         EventScope::Channel {
             guild_id: gid,
             channel_id: cid,
@@ -678,9 +666,7 @@ pub async fn list_channels(
 ) -> AppResult<Json<Vec<Channel>>> {
     let gid = parse_i64(&guild_id)?;
     pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::VIEW_CHANNEL).await?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let rows = sqlx::query(&format!(
         "{CHANNEL_SELECT} WHERE guild_id = ? ORDER BY position, id"
     ))
@@ -833,8 +819,7 @@ pub async fn update_channel(
     let ch = fetch_channel(&st, cid).await?;
     crate::routes_moderation::audit_named(&st, gid, user.id.as_i64(), "channel_update", &ch.name)
         .await;
-    emit(
-        &st,
+    st.publish(
         EventScope::Channel {
             guild_id: gid,
             channel_id: cid,
@@ -893,8 +878,7 @@ pub async fn delete_channel(
         .await?;
     crate::routes_moderation::audit_named(&st, gid, user.id.as_i64(), "channel_delete", &chan_name)
         .await;
-    emit(
-        &st,
+    st.publish(
         EventScope::Guild(gid),
         "CHANNEL_DELETE",
         serde_json::json!({ "id": cid.to_string(), "guild_id": gid.to_string() }),
@@ -903,8 +887,7 @@ pub async fn delete_channel(
     // (sinon, leur parent pointant vers une catégorie supprimée, ils disparaîtraient de la liste).
     for child in child_ids {
         if let Ok(ch) = fetch_channel(&st, child).await {
-            emit(
-                &st,
+            st.publish(
                 EventScope::Channel {
                     guild_id: gid,
                     channel_id: child,
@@ -985,8 +968,7 @@ pub async fn reorder_channels(
             serde_json::json!({ "id": it.id.to_string(), "position": it.position, "parent_id": parent })
         })
         .collect();
-    emit(
-        &st,
+    st.publish(
         EventScope::Guild(gid),
         "CHANNELS_REORDER",
         serde_json::json!({ "guild_id": gid.to_string(), "positions": positions }),
@@ -1042,8 +1024,7 @@ pub async fn create_thread(
     .execute(&st.pool)
     .await?;
     let ch = fetch_channel(&st, id.as_i64()).await?;
-    emit(
-        &st,
+    st.publish(
         EventScope::Channel {
             guild_id: gid,
             channel_id: id.as_i64(),

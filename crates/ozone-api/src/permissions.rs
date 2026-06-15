@@ -14,6 +14,13 @@ pub async fn guild_owner(pool: &SqlitePool, guild_id: i64) -> AppResult<Option<i
     Ok(row.map(|r| r.get::<i64, _>("owner_id")))
 }
 
+/// Comme [`guild_owner`], mais renvoie `404 guilde introuvable` si la guilde n'existe pas.
+pub async fn require_guild_owner_id(pool: &SqlitePool, guild_id: i64) -> AppResult<i64> {
+    guild_owner(pool, guild_id)
+        .await?
+        .ok_or_else(|| AppError::not_found("guilde introuvable"))
+}
+
 /// `guild_id` du salon (`None` si MP, erreur 404 gérée par l'appelant si le salon n'existe pas).
 pub async fn channel_guild(pool: &SqlitePool, channel_id: i64) -> AppResult<Option<Option<i64>>> {
     let row = sqlx::query("SELECT guild_id FROM channels WHERE id = ?")

@@ -17,7 +17,6 @@ import { canIn, roleColorHex, userNameStyle, useStore } from "../store";
 import { PERM } from "../lib/permissions";
 import { OVERLAY_ANIM } from "../lib/anim";
 import { CH_VOICE, type ModerateVoiceState, type UserProfile } from "../types";
-import { Avatar } from "./Avatar";
 import { colorFor, initials } from "../lib/format";
 import { mediaUrl } from "../lib/instance";
 
@@ -612,27 +611,4 @@ export function UserPopover({
 
 function Divider() {
   return <div className="my-2 h-px bg-white/10" />;
-}
-
-// Avatar cliquable ouvrant le profil (raccourci pratique).
-export function ProfileAvatar({
-  userId,
-  name,
-  size = 40,
-  ring,
-  status,
-  avatarId,
-}: {
-  userId: string;
-  name: string;
-  size?: number;
-  ring?: string;
-  status?: string | null;
-  avatarId?: string | null;
-}) {
-  return (
-    <UserPopover userId={userId}>
-      <Avatar name={name} id={userId} size={size} ring={ring} status={status} avatarId={avatarId} />
-    </UserPopover>
-  );
 }

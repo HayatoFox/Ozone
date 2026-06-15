@@ -6,6 +6,11 @@ export function displayName(u: User): string {
   return u.display_name || u.username;
 }
 
+// Message d'erreur lisible à partir d'une exception inconnue (repli générique).
+export function errText(e: unknown): string {
+  return e instanceof Error ? e.message : "Échec.";
+}
+
 export function initials(name: string): string {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   if (parts.length === 0) return "?";
@@ -23,16 +28,6 @@ export function colorFor(id: string): string {
 
 export function formatHM(ms: number): string {
   return new Date(ms).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
-}
-
-export function formatTime(ms: number): string {
-  const d = new Date(ms);
-  return d.toLocaleString("fr-FR", {
-    day: "2-digit",
-    month: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
 }
 
 // Epoch des snowflakes Ozone (cf. crates/ozone-proto/src/ids.rs) → date de création d'un compte.

@@ -26,8 +26,7 @@ L'objectif technique central : **une application réellement native, GPU-accél�
 
 | Couche | Choix | Pourquoi |
 |---|---|---|
-| **UI client (desktop)** | Rust + **GPUI** (alt. Iced) | Rendu GPU immédiat, fluidité « niveau Zed », thémable |
-| **Cœur client partagé** | Crate **Rust** (`ozone-core`) | Réseau, état, cache SQLite, moteur voix, crypto — réutilisable mobile |
+| **UI client (desktop)** | **React + TypeScript**, empaqueté **Tauri** (`.exe`) | Client de référence : itération rapide, écosystème web mûr, WebRTC natif |
 | **Mobile (phase ultérieure)** | Cœur Rust via FFI + SwiftUI / Jetpack Compose | Réutilise 80 % du code, UI 100 % native |
 | **API & Gateway** | **Rust** (axum + tokio) | Latence faible, millions de connexions WS |
 | **SFU vocal/vidéo** | **Rust** (str0m / webrtc-rs) | Routage média performant, Opus + AV1/VP9 |

@@ -107,9 +107,7 @@ pub async fn ack_guild(
     let gid = parse_i64(&gid)?;
     let uid = user.id.as_i64();
     pg::require_guild_member(&st.pool, gid, uid).await?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let channels = sqlx::query("SELECT id FROM channels WHERE guild_id = ?")
         .bind(gid)
         .fetch_all(&st.pool)

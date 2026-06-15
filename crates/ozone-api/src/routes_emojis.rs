@@ -38,6 +38,28 @@ fn detect_image_type(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
+/// En-tête `Content-Type` d'une image servie, restreint au jeu de types connu (défense en
+/// profondeur) ; tout le reste retombe sur `application/octet-stream`.
+fn image_content_type(ctype: &str) -> header::HeaderValue {
+    header::HeaderValue::from_static(match ctype {
+        "image/png" => "image/png",
+        "image/gif" => "image/gif",
+        "image/webp" => "image/webp",
+        "image/jpeg" => "image/jpeg",
+        _ => "application/octet-stream",
+    })
+}
+
+/// Écrit `data` dans un nouveau fichier d'upload (nom = id Snowflake) et renvoie l'id généré.
+async fn store_upload(st: &AppState, data: &[u8]) -> AppResult<Snowflake> {
+    let id = st.ids.next();
+    let path = st.upload_dir.join(id.as_i64().to_string());
+    tokio::fs::write(&path, data)
+        .await
+        .map_err(|e| AppError::internal(format!("écriture du fichier : {e}")))?;
+    Ok(id)
+}
+
 // ───────────────────────── Helpers privés ─────────────────────────
 
 /// Convertit une ligne SQLite en DTO [`Emoji`].
@@ -269,11 +291,7 @@ pub async fn upload_emoji_image(
         return Err(AppError::bad_request("format d'image non supporté (png/gif/webp/jpeg)"));
     }
 
-    let id = st.ids.next();
-    let path = st.upload_dir.join(id.as_i64().to_string());
-    tokio::fs::write(&path, &data)
-        .await
-        .map_err(|e| AppError::internal(format!("écriture du fichier : {e}")))?;
+    let id = store_upload(&st, &data).await?;
 
     Ok(Json(serde_json::json!({ "image_id": id.to_string() })))
 }
@@ -317,11 +335,7 @@ pub async fn upload_sticker_image(
         return Err(AppError::bad_request("format d'image non supporté (png/gif/webp/jpeg)"));
     }
 
-    let id = st.ids.next();
-    let path = st.upload_dir.join(id.as_i64().to_string());
-    tokio::fs::write(&path, &data)
-        .await
-        .map_err(|e| AppError::internal(format!("écriture du fichier : {e}")))?;
+    let id = store_upload(&st, &data).await?;
 
     Ok(Json(serde_json::json!({ "image_id": id.to_string() })))
 }
@@ -348,16 +362,7 @@ pub async fn serve_emoji(State(st): State<AppState>, Path(eid): Path<String>) ->
 
     let mut resp = Response::new(Body::from(bytes));
     let h = resp.headers_mut();
-    h.insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static(match ctype {
-            "image/png" => "image/png",
-            "image/gif" => "image/gif",
-            "image/webp" => "image/webp",
-            "image/jpeg" => "image/jpeg",
-            _ => "application/octet-stream",
-        }),
-    );
+    h.insert(header::CONTENT_TYPE, image_content_type(ctype));
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         header::HeaderValue::from_static("nosniff"),
@@ -392,16 +397,7 @@ async fn serve_stored_image(st: &AppState, image_id: Option<String>) -> AppResul
     let ctype = detect_image_type(&bytes).unwrap_or("application/octet-stream");
     let mut resp = Response::new(Body::from(bytes));
     let h = resp.headers_mut();
-    h.insert(
-        header::CONTENT_TYPE,
-        header::HeaderValue::from_static(match ctype {
-            "image/png" => "image/png",
-            "image/gif" => "image/gif",
-            "image/webp" => "image/webp",
-            "image/jpeg" => "image/jpeg",
-            _ => "application/octet-stream",
-        }),
-    );
+    h.insert(header::CONTENT_TYPE, image_content_type(ctype));
     h.insert(
         header::X_CONTENT_TYPE_OPTIONS,
         header::HeaderValue::from_static("nosniff"),
@@ -454,11 +450,7 @@ pub async fn upload_guild_image(
     if detect_image_type(&data).is_none() {
         return Err(AppError::bad_request("format d'image non supporté (png/gif/webp/jpeg)"));
     }
-    let id = st.ids.next();
-    let path = st.upload_dir.join(id.as_i64().to_string());
-    tokio::fs::write(&path, &data)
-        .await
-        .map_err(|e| AppError::internal(format!("écriture du fichier : {e}")))?;
+    let id = store_upload(&st, &data).await?;
     Ok(Json(serde_json::json!({ "image_id": id.to_string() })))
 }
 
@@ -536,11 +528,7 @@ pub async fn upload_sound_audio(
             "format audio non supporté (mp3/ogg/wav)",
         ));
     }
-    let id = st.ids.next();
-    let path = st.upload_dir.join(id.as_i64().to_string());
-    tokio::fs::write(&path, &data)
-        .await
-        .map_err(|e| AppError::internal(format!("écriture du fichier : {e}")))?;
+    let id = store_upload(&st, &data).await?;
     Ok(Json(serde_json::json!({ "sound_id": id.to_string() })))
 }
 
@@ -612,11 +600,7 @@ pub async fn upload_user_image(
             "format d'image non supporté (png/gif/webp/jpeg)",
         ));
     }
-    let id = st.ids.next();
-    let path = st.upload_dir.join(id.as_i64().to_string());
-    tokio::fs::write(&path, &data)
-        .await
-        .map_err(|e| AppError::internal(format!("écriture du fichier : {e}")))?;
+    let id = store_upload(&st, &data).await?;
     Ok(Json(serde_json::json!({ "image_id": id.to_string() })))
 }
 

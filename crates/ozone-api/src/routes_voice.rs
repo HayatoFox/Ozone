@@ -252,9 +252,7 @@ pub async fn moderate_voice_state(
     }
 
     // Le propriétaire ne peut pas être modéré en vocal.
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     if target == owner {
         return Err(AppError::forbidden(
             "impossible de modérer le propriétaire en vocal",

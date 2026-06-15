@@ -9,10 +9,7 @@ import { CH_TEXT, type AutomodRule, type Snowflake } from "../types";
 import { Spinner } from "./ui/Spinner";
 import { ListSkeleton } from "./ui/Skeleton";
 import { staggerDelay } from "../lib/anim";
-
-function errText(e: unknown): string {
-  return e instanceof Error ? e.message : "Échec.";
-}
+import { errText } from "../lib/format";
 
 export function AutomodPage({ guildId }: { guildId: Snowflake }) {
   const [rules, setRules] = useState<AutomodRule[] | null>(null);

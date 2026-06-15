@@ -152,9 +152,7 @@ pub async fn update_role(
     let rid = parse_i64(&rid)?;
     let actor =
         pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_ROLES).await?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let role = fetch_role(&st, gid, rid).await?;
     let role_pos = role.get::<i64, _>("position") as i32;
     let actor_pos = pg::highest_role_position(&st.pool, gid, owner, user.id.as_i64()).await?;
@@ -179,12 +177,7 @@ pub async fn update_role(
         sanitize_color_style(req.color_style.as_deref())
     } else {
         // Conserve l'existant (validé à l'écriture).
-        match role.try_get::<String, _>("color_style").ok().as_deref() {
-            Some("gradient") => "gradient",
-            Some("neon") => "neon",
-            Some("wave") => "wave",
-            _ => "solid",
-        }
+        sanitize_color_style(role.try_get::<String, _>("color_style").ok().as_deref())
     };
     let hoist = req
         .hoist
@@ -235,9 +228,7 @@ pub async fn reorder_roles(
 ) -> AppResult<Json<Vec<Role>>> {
     let gid = parse_i64(&gid)?;
     pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_ROLES).await?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let is_owner = owner == user.id.as_i64();
     let actor_pos = pg::highest_role_position(&st.pool, gid, owner, user.id.as_i64()).await?;
 
@@ -335,9 +326,7 @@ pub async fn delete_role(
         ));
     }
     pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_ROLES).await?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let role = fetch_role(&st, gid, rid).await?;
     let role_pos = role.get::<i64, _>("position") as i32;
     let role_name: String = role.get("name");
@@ -380,9 +369,7 @@ pub async fn add_member_role(
         return Err(AppError::bad_request("le rôle @everyone est implicite"));
     }
     pg::require_guild_perm(&st.pool, gid, user.id.as_i64(), perms::MANAGE_ROLES).await?;
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let role = fetch_role(&st, gid, rid).await?;
     let role_pos = role.get::<i64, _>("position") as i32;
     let actor_pos = pg::highest_role_position(&st.pool, gid, owner, user.id.as_i64()).await?;
@@ -428,9 +415,7 @@ pub async fn remove_member_role(
     if rid == gid {
         return Err(AppError::bad_request("@everyone ne peut pas être retiré"));
     }
-    let owner = pg::guild_owner(&st.pool, gid)
-        .await?
-        .ok_or_else(|| AppError::not_found("guilde introuvable"))?;
+    let owner = pg::require_guild_owner_id(&st.pool, gid).await?;
     let role = fetch_role(&st, gid, rid).await?;
     let role_pos = role.get::<i64, _>("position") as i32;
     let actor_pos = pg::highest_role_position(&st.pool, gid, owner, user.id.as_i64()).await?;

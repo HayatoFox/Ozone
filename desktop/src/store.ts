@@ -27,7 +27,6 @@ import {
   CH_TEXT,
   CH_THREAD_PRIVATE,
   CH_THREAD_PUBLIC,
-  CH_VOICE,
   type Channel,
   type CreateMessage,
   type DMChannel,
@@ -2545,10 +2544,6 @@ export function reorderChannelPlan(
   return flat.map((x, i) => ({ id: x.id, position: i, parent_id: x.parent }));
 }
 
-export function isVoice(c: Channel): boolean {
-  return c.type === CH_VOICE;
-}
-
 // Une portée (guilde/salon) est-elle en sourdine ?
 export function isMuted(
   notif: Record<string, NotificationSetting>,
@@ -2614,11 +2609,8 @@ export function roleColorHex(color: number): string {
 
 // Couleur du rôle le plus haut (position) ayant une couleur, pour un membre donné.
 export function memberTopRoleColor(roles: Role[], member?: Member): string | null {
-  if (!member || !roles.length) return null;
-  const colored = roles.filter((r) => member.roles.includes(r.id) && r.color !== 0);
-  if (!colored.length) return null;
-  colored.sort((a, b) => b.position - a.position);
-  return roleColorHex(colored[0].color);
+  const role = memberTopColorRole(roles, member);
+  return role ? roleColorHex(role.color) : null;
 }
 
 // Rôle coloré le plus haut (objet complet) d'un membre — pour appliquer le style (dégradé, néon, vague).
