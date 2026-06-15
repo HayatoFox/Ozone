@@ -691,6 +691,7 @@ function AttachmentView({ att, onImage }: { att: Attachment; onImage: (url: stri
     return (
       <AuthedVideo
         src={url}
+        filename={cleanName}
         className={`max-h-80 max-w-md rounded-md ${isSpoiler ? "animate-overlay-in" : ""}`}
       />
     );
