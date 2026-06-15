@@ -44,11 +44,14 @@ import type {
   Message,
   ModerateVoiceState,
   NotificationSetting,
+  EncryptionKeys,
   PermissionOverwrite,
   Poll,
+  PreloginResponse,
   PresenceView,
   PublicKey,
   ReadState,
+  UpgradeEncryption,
   RegisterRequest,
   SetNotificationSetting,
   SetOverwrite,
@@ -300,8 +303,15 @@ export const api = {
     }),
   register: (req: RegisterRequest) =>
     request<TokenPair>("/auth/register", { method: "POST", body: req, auth: false }),
+  // Pré-login : récupère le sel KDF + le schéma d'auth pour un identifiant (avant dérivation).
+  prelogin: (login: string) =>
+    request<PreloginResponse>("/auth/prelogin", { method: "POST", body: { login }, auth: false }),
   login: (req: LoginRequest) =>
     request<TokenPair>("/auth/login", { method: "POST", body: req, auth: false }),
+  // Escrow E2EE : matériel chiffré de @me + migration legacy→zero-knowledge.
+  getEncryption: () => get<EncryptionKeys>("/users/@me/encryption"),
+  upgradeEncryption: (req: UpgradeEncryption) =>
+    post<{ ok: boolean }>("/users/@me/encryption/upgrade", req),
   refresh: (refresh_token: string) =>
     request<TokenPair>("/auth/token/refresh", {
       method: "POST",

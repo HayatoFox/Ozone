@@ -8,7 +8,9 @@ use crate::state::AppState;
 use crate::util::parse_i64;
 use axum::extract::{Path, State};
 use axum::Json;
-use ozone_proto::dto::{PublicKey, SetPublicKey, UpdateProfile, UserProfile, UserSettings};
+use ozone_proto::dto::{
+    EncryptionKeys, PublicKey, SetPublicKey, UpdateProfile, UserProfile, UserSettings,
+};
 use ozone_proto::Snowflake;
 use sqlx::sqlite::SqliteRow;
 use sqlx::Row;
@@ -270,6 +272,24 @@ pub async fn put_public_key(
         .await?;
     Ok(Json(PublicKey {
         public_key: Some(key.to_string()),
+    }))
+}
+
+/// `GET /users/@me/encryption` — matériel de chiffrement DM de l'utilisateur courant : clé publique
+/// + clé privée EMBALLÉE (escrow). Le client la déballe localement avec la KEK dérivée du mot de passe.
+pub async fn get_encryption(
+    State(st): State<AppState>,
+    user: AuthUser,
+) -> AppResult<Json<EncryptionKeys>> {
+    let row = sqlx::query("SELECT dm_public_key, dm_priv_wrapped, pw_scheme FROM users WHERE id = ?")
+        .bind(user.id.as_i64())
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
+    Ok(Json(EncryptionKeys {
+        public_key: row.get("dm_public_key"),
+        priv_wrapped: row.get("dm_priv_wrapped"),
+        pw_scheme: row.get::<i64, _>("pw_scheme") as u8,
     }))
 }
 

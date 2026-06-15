@@ -16,6 +16,7 @@ import {
 import { mediaUrl } from "./lib/instance";
 import {
   decryptFromUser,
+  e2eeForget,
   encryptForUser,
   ensureKeypair,
   hasPublicKey,
@@ -743,6 +744,8 @@ export const useStore = create<State>((set, get) => ({
     }
     get().localScreen?.getTracks().forEach((t) => t.stop());
     setTokens(null);
+    // Oublie la clé DM locale : un autre utilisateur sur ce poste ne doit pas hériter de la clé du précédent.
+    e2eeForget();
     set({
       authed: false,
       me: null,

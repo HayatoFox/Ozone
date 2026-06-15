@@ -975,6 +975,8 @@ impl App {
                 let req = ozone_core::proto::dto::ChangePassword {
                     current_password: std::mem::take(&mut self.settings_cur_pwd),
                     new_password: std::mem::take(&mut self.settings_new_pwd),
+                    // L'UI iced legacy ne gère pas l'escrow E2EE (client v1).
+                    priv_wrapped: None,
                 };
                 let api = self.instances[idx].api.clone();
                 Task::perform(

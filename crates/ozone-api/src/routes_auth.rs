@@ -10,8 +10,8 @@ use crate::state::AppState;
 use axum::extract::State;
 use axum::Json;
 use ozone_proto::dto::{
-    ChangeEmail, ChangePassword, DeleteAccount, LoginRequest, RefreshRequest, RegisterRequest,
-    RegistrationPolicy, TokenPair, User,
+    ChangeEmail, ChangePassword, DeleteAccount, LoginRequest, PreloginRequest, PreloginResponse,
+    RefreshRequest, RegisterRequest, RegistrationPolicy, TokenPair, UpgradeEncryption, User,
 };
 use ozone_proto::Snowflake;
 use sqlx::Row;
@@ -151,11 +151,22 @@ pub async fn register(
         refund(st.clone(), invite_to_consume).await;
         return Err(AppError::bad_request("pseudo invalide (2 à 32 caractères)"));
     }
-    // R3 — politique de mot de passe : longueur minimale + rejet des mots de passe trop faibles
-    // (denylist courante) et qui contiennent le pseudo.
-    if let Err(e) = validate_password_strength(&req.password, &username) {
-        refund(st.clone(), invite_to_consume).await;
-        return Err(e);
+    // v2 (zero-knowledge) : `password` porte l'`authSecret` dérivé + dépôt de l'escrow chiffré.
+    let is_v2 = req.public_key.is_some() && req.priv_wrapped.is_some();
+    // R3 — politique de mot de passe : appliquée en legacy uniquement (en v2, le serveur ne voit que
+    // l'authSecret ; la robustesse du VRAI mot de passe est vérifiée côté client avant dérivation).
+    if !is_v2 {
+        if let Err(e) = validate_password_strength(&req.password, &username) {
+            refund(st.clone(), invite_to_consume).await;
+            return Err(e);
+        }
+    } else {
+        let pk = req.public_key.as_deref().unwrap_or("");
+        let blob = req.priv_wrapped.as_deref().unwrap_or("");
+        if pk.is_empty() || pk.len() > 1024 || blob.is_empty() || blob.len() > 8192 {
+            refund(st.clone(), invite_to_consume).await;
+            return Err(AppError::bad_request("matériel de chiffrement invalide"));
+        }
     }
     let email = req.email.trim().to_lowercase();
     if !email.contains('@') {
@@ -179,8 +190,10 @@ pub async fn register(
     // (R5) — sinon une inscription échouée consommerait définitivement un usage.
     let outcome: AppResult<TokenPair> = async {
         let pw = crypto::hash_password(&req.password).map_err(AppError::internal)?;
+        let scheme = if is_v2 { 2 } else { 1 };
         sqlx::query(
-            "INSERT INTO users (id, username, display_name, email, password_hash, avatar_id, created_at) VALUES (?, ?, ?, ?, ?, NULL, ?)",
+            "INSERT INTO users (id, username, display_name, email, password_hash, avatar_id, created_at, dm_public_key, dm_priv_wrapped, pw_scheme, kdf_salt) \
+             VALUES (?, ?, ?, ?, ?, NULL, ?, ?, ?, ?, ?)",
         )
         .bind(id.as_i64())
         .bind(&username)
@@ -188,6 +201,10 @@ pub async fn register(
         .bind(&email)
         .bind(&pw)
         .bind(now_ms())
+        .bind(req.public_key.as_deref())
+        .bind(req.priv_wrapped.as_deref())
+        .bind(scheme)
+        .bind(req.kdf_salt.as_deref())
         .execute(&st.pool)
         .await?;
 
@@ -342,28 +359,133 @@ pub async fn change_password(
     Json(req): Json<ChangePassword>,
 ) -> AppResult<Json<serde_json::Value>> {
     let uid = user.id.as_i64();
-    let hash: String = sqlx::query("SELECT password_hash FROM users WHERE id = ?")
+    let row = sqlx::query("SELECT password_hash, pw_scheme FROM users WHERE id = ?")
         .bind(uid)
         .fetch_optional(&st.pool)
         .await?
-        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?
-        .get("password_hash");
+        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
+    let hash: String = row.get("password_hash");
+    let scheme: i64 = row.get("pw_scheme");
     if !crypto::verify_password(&req.current_password, &hash) {
         return Err(AppError::unauthorized("mot de passe actuel invalide"));
     }
-    validate_password_strength(&req.new_password, "")?;
+    // En v2, `new_password` est l'authSecret (robustesse vérifiée côté client) ; sinon politique R3.
+    if scheme != 2 {
+        validate_password_strength(&req.new_password, "")?;
+    }
     let new_hash = crypto::hash_password(&req.new_password).map_err(AppError::internal)?;
-    sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
-        .bind(&new_hash)
-        .bind(uid)
-        .execute(&st.pool)
-        .await?;
+    // Re-emballe l'escrow avec la NOUVELLE KEK (sans quoi la clé privée deviendrait indéchiffrable).
+    match req.priv_wrapped.as_deref() {
+        Some(blob) => {
+            if blob.is_empty() || blob.len() > 8192 {
+                return Err(AppError::bad_request("clé emballée invalide"));
+            }
+            sqlx::query("UPDATE users SET password_hash = ?, dm_priv_wrapped = ? WHERE id = ?")
+                .bind(&new_hash)
+                .bind(blob)
+                .bind(uid)
+                .execute(&st.pool)
+                .await?;
+        }
+        None => {
+            sqlx::query("UPDATE users SET password_hash = ? WHERE id = ?")
+                .bind(&new_hash)
+                .bind(uid)
+                .execute(&st.pool)
+                .await?;
+        }
+    }
     // Sécurité : révoque toutes les sessions (refresh tokens) — reconnexion requise partout.
     sqlx::query("DELETE FROM sessions WHERE user_id = ?")
         .bind(uid)
         .execute(&st.pool)
         .await?;
     Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `POST /users/@me/encryption/upgrade` — bascule un compte legacy (v1) vers le schéma zero-knowledge
+/// (v2). On prouve la possession du mot de passe BRUT actuel une dernière fois, puis le serveur ne
+/// stocke plus que `Argon2(authSecret)` et l'escrow chiffré (la session courante reste valide).
+pub async fn upgrade_encryption(
+    State(st): State<AppState>,
+    user: AuthUser,
+    Json(req): Json<UpgradeEncryption>,
+) -> AppResult<Json<serde_json::Value>> {
+    let uid = user.id.as_i64();
+    let row = sqlx::query("SELECT password_hash, pw_scheme FROM users WHERE id = ?")
+        .bind(uid)
+        .fetch_optional(&st.pool)
+        .await?
+        .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
+    let hash: String = row.get("password_hash");
+    if row.get::<i64, _>("pw_scheme") == 2 {
+        return Err(AppError::bad_request("chiffrement déjà migré"));
+    }
+    if !crypto::verify_password(&req.current_password, &hash) {
+        return Err(AppError::unauthorized("mot de passe invalide"));
+    }
+    if req.public_key.is_empty()
+        || req.public_key.len() > 1024
+        || req.priv_wrapped.is_empty()
+        || req.priv_wrapped.len() > 8192
+        || req.auth_secret.is_empty()
+        || req.auth_secret.len() > 1024
+        || req.kdf_salt.is_empty()
+        || req.kdf_salt.len() > 128
+    {
+        return Err(AppError::bad_request("matériel de chiffrement invalide"));
+    }
+    let new_hash = crypto::hash_password(&req.auth_secret).map_err(AppError::internal)?;
+    sqlx::query(
+        "UPDATE users SET password_hash = ?, pw_scheme = 2, dm_public_key = ?, dm_priv_wrapped = ?, kdf_salt = ? WHERE id = ?",
+    )
+    .bind(&new_hash)
+    .bind(&req.public_key)
+    .bind(&req.priv_wrapped)
+    .bind(&req.kdf_salt)
+    .bind(uid)
+    .execute(&st.pool)
+    .await?;
+    Ok(Json(serde_json::json!({ "ok": true })))
+}
+
+/// `POST /auth/prelogin` — restitue le sel KDF + le schéma pour un identifiant, AVANT le login, afin
+/// que le client dérive `authSecret`/KEK (login par e-mail OU pseudo). Anti-énumération : pour un
+/// compte inexistant (ou v1 sans sel), renvoie un sel DÉTERMINISTE factice (HMAC-like via le secret
+/// JWT) indistinguable d'un vrai sel, avec `pw_scheme = 2`.
+pub async fn prelogin(
+    State(st): State<AppState>,
+    ClientIp(ip): ClientIp,
+    Json(req): Json<PreloginRequest>,
+) -> AppResult<Json<PreloginResponse>> {
+    st.rate
+        .check(ratelimit::LOGIN, &ip)
+        .map_err(AppError::rate_limited)?;
+    let login = req.login.trim().to_lowercase();
+    let row = sqlx::query("SELECT pw_scheme, kdf_salt FROM users WHERE username = ? OR email = ?")
+        .bind(&login)
+        .bind(&login)
+        .fetch_optional(&st.pool)
+        .await?;
+    // Sel factice déterministe (compte inexistant ou v1) : SHA-256(secret JWT | login) en hex (64
+    // car.), indistinguable d'un vrai sel client (32 octets aléatoires → hex). Lié au secret serveur
+    // ⇒ non précalculable par un attaquant, donc pas d'énumération.
+    let fake_salt = || {
+        let secret = String::from_utf8_lossy(st.jwt_secret.as_ref());
+        crypto::sha256_hex(&format!("{secret}|prelogin|{login}"))
+    };
+    let (scheme, salt) = match row {
+        Some(r) => {
+            let scheme = r.get::<i64, _>("pw_scheme") as u8;
+            let salt: Option<String> = r.get("kdf_salt");
+            (scheme, salt.unwrap_or_else(fake_salt))
+        }
+        None => (2, fake_salt()),
+    };
+    Ok(Json(PreloginResponse {
+        kdf_salt: salt,
+        pw_scheme: scheme,
+    }))
 }
 
 /// `PATCH /users/@me/email` — change l'e-mail (ré-auth requise, unicité vérifiée).

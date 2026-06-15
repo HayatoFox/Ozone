@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { ArrowLeft } from "lucide-react";
-import { api, ApiError, setTokens } from "../api";
+import { api, ApiError } from "../api";
+import { e2eeLogin, e2eeRegister } from "../lib/e2ee";
 import { useStore } from "../store";
 import type { InstanceInfo } from "../types";
 import { Spinner } from "./ui/Spinner";
@@ -38,18 +39,19 @@ export function AuthScreen({ instance }: { instance: InstanceInfo | null }) {
     setError(null);
     try {
       const gate_token = await obtainGateToken();
-      const tokens =
-        mode === "login"
-          ? await api.login({ login, password, gate_token })
-          : await api.register({
-              username,
-              email,
-              password,
-              display_name: displayNameField || null,
-              gate_token,
-              invite_code: policy === "invite" ? inviteCode || null : null,
-            });
-      setTokens(tokens);
+      // e2eeLogin/e2eeRegister dérivent l'authSecret + (dé)bloquent la clé DM, et posent les jetons.
+      if (mode === "login") {
+        await e2eeLogin(login, password, gate_token ?? undefined);
+      } else {
+        await e2eeRegister({
+          username,
+          email,
+          password,
+          display_name: displayNameField || null,
+          gate_token,
+          invite_code: policy === "invite" ? inviteCode || null : null,
+        });
+      }
       const me = await api.me();
       useStore.setState({ me, authed: true });
       await afterAuth();

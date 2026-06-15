@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Bell, Headphones, KeyRound, LogOut, Mail, Palette, ShieldCheck, Trash2, Upload, UserRound, X } from "lucide-react";
 import { api, ApiError } from "../api";
+import { e2eeChangePassword } from "../lib/e2ee";
 import { roleColorHex, useStore, type MessageDisplay, type Theme } from "../store";
 import type { UserProfile } from "../types";
 import { colorFor, displayName, initials } from "../lib/format";
@@ -245,7 +246,8 @@ function ChangePasswordModal({ onClose }: { onClose: () => void }) {
     setBusy(true);
     setErr(null);
     try {
-      await api.changePassword({ current_password: cur, new_password: next });
+      // v2 : ré-emballe la clé DM avec la nouvelle KEK (sinon l'escrow deviendrait indéchiffrable).
+      await e2eeChangePassword(cur, next);
       // Le serveur révoque les sessions → on se déconnecte proprement.
       logout();
     } catch (e) {

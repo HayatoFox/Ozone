@@ -81,6 +81,7 @@ pub fn build_app(state: AppState) -> Router {
         )
         // Authentification
         .route("/auth/register", post(routes_auth::register))
+        .route("/auth/prelogin", post(routes_auth::prelogin))
         .route("/auth/login", post(routes_auth::login))
         .route("/auth/token/refresh", post(routes_auth::refresh))
         .route(
@@ -96,6 +97,12 @@ pub fn build_app(state: AppState) -> Router {
         // Clé publique de chiffrement DM (E2EE) : dépôt de la sienne, lecture de celle d'autrui.
         .route("/users/@me/keys", put(routes_users::put_public_key))
         .route("/users/:user_id/keys", get(routes_users::get_public_key))
+        // Escrow E2EE (persistance multi-appareils) : récupérer son matériel chiffré, migrer v1→v2.
+        .route("/users/@me/encryption", get(routes_users::get_encryption))
+        .route(
+            "/users/@me/encryption/upgrade",
+            post(routes_auth::upgrade_encryption),
+        )
         .route("/users/@me/presence", put(routes_presence::set_presence))
         .route("/users/@me/password", patch(routes_auth::change_password))
         .route("/users/@me/email", patch(routes_auth::change_email))

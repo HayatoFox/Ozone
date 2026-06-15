@@ -55,6 +55,8 @@ pub struct InstanceInfo {
 pub struct RegisterRequest {
     pub username: String,
     pub email: String,
+    /// Schéma v2 (zero-knowledge) : `password` porte l'`authSecret` dérivé côté client (le serveur
+    /// ne voit jamais le mot de passe brut). Schéma legacy : `password` est le mot de passe brut.
     pub password: String,
     #[serde(default)]
     pub display_name: Option<String>,
@@ -64,6 +66,31 @@ pub struct RegisterRequest {
     /// Code d'invitation d'instance (si politique `invite`).
     #[serde(default)]
     pub invite_code: Option<String>,
+    /// E2EE (v2) : clé publique DM (SPKI base64) générée à l'inscription.
+    #[serde(default)]
+    pub public_key: Option<String>,
+    /// E2EE (v2) : clé privée DM emballée par la KEK (« iv|ciphertext » base64), déposée pour
+    /// la persistance multi-appareils. Présence de `public_key`+`priv_wrapped` ⇒ compte v2.
+    #[serde(default)]
+    pub priv_wrapped: Option<String>,
+    /// E2EE (v2) : sel KDF aléatoire (base64) choisi par le client, restitué avant login.
+    #[serde(default)]
+    pub kdf_salt: Option<String>,
+}
+
+/// Pré-login : le client demande le sel KDF (et le schéma) pour un identifiant, AVANT de dériver
+/// l'`authSecret`. Réponse indistinguable pour un compte inexistant (pas d'énumération).
+#[derive(Clone, Debug, Deserialize)]
+pub struct PreloginRequest {
+    pub login: String,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PreloginResponse {
+    /// Sel KDF (base64). Toujours présent (valeur déterministe factice si compte inexistant).
+    pub kdf_salt: String,
+    /// 1 = legacy (login au mot de passe brut), 2 = zero-knowledge (login à l'authSecret).
+    pub pw_scheme: u8,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -86,10 +113,37 @@ pub struct GateResponse {
 }
 
 /// Changement de mot de passe (ré-authentification par le mot de passe actuel).
+/// En v2, `current_password`/`new_password` portent les `authSecret` dérivés ; `priv_wrapped` est la
+/// clé privée DM ré-emballée par la NOUVELLE KEK (sinon l'escrow deviendrait indéchiffrable).
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct ChangePassword {
     pub current_password: String,
     pub new_password: String,
+    #[serde(default)]
+    pub priv_wrapped: Option<String>,
+}
+
+/// Migration d'un compte legacy (v1) vers le schéma zero-knowledge (v2) : on prouve la possession du
+/// mot de passe brut une dernière fois, puis on bascule sur `authSecret` + dépôt de l'escrow.
+#[derive(Clone, Debug, Deserialize)]
+pub struct UpgradeEncryption {
+    /// Mot de passe BRUT actuel (vérifié contre le hash legacy ; envoyé une seule fois).
+    pub current_password: String,
+    /// Nouveau secret d'authentification dérivé (devient le « mot de passe » côté serveur).
+    pub auth_secret: String,
+    pub public_key: String,
+    pub priv_wrapped: String,
+    /// Sel KDF aléatoire (base64) choisi par le client lors de la migration.
+    pub kdf_salt: String,
+}
+
+/// Matériel de chiffrement DM de l'utilisateur courant (clé publique + clé privée emballée).
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EncryptionKeys {
+    pub public_key: Option<String>,
+    pub priv_wrapped: Option<String>,
+    /// Schéma d'auth du compte (2 = zero-knowledge/escrow actif, 1 = legacy à migrer).
+    pub pw_scheme: u8,
 }
 
 /// Changement d'e-mail (ré-authentification par le mot de passe).

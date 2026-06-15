@@ -25,17 +25,45 @@ export interface InstanceInfo {
 
 export interface RegisterRequest {
   username: string;
+  /** v2 : porte l'`authSecret` dérivé (le serveur ne voit jamais le mot de passe brut). */
   email: string;
   password: string;
   display_name?: string | null;
   gate_token?: string | null;
   invite_code?: string | null;
+  /** E2EE (v2) : clé publique DM (SPKI base64). */
+  public_key?: string | null;
+  /** E2EE (v2) : clé privée DM emballée (escrow) « iv|ciphertext » base64. */
+  priv_wrapped?: string | null;
+  /** E2EE (v2) : sel KDF aléatoire (hex). */
+  kdf_salt?: string | null;
 }
 
 export interface LoginRequest {
   login: string;
+  /** v2 : porte l'`authSecret` dérivé du sel (prelogin). */
   password: string;
   gate_token?: string | null;
+}
+
+export interface PreloginResponse {
+  kdf_salt: string;
+  pw_scheme: number;
+}
+
+/** Matériel de chiffrement DM de l'utilisateur courant (escrow). */
+export interface EncryptionKeys {
+  public_key: string | null;
+  priv_wrapped: string | null;
+  pw_scheme: number;
+}
+
+export interface UpgradeEncryption {
+  current_password: string;
+  auth_secret: string;
+  public_key: string;
+  priv_wrapped: string;
+  kdf_salt: string;
 }
 
 export interface GateRequest {
@@ -48,6 +76,8 @@ export interface GateResponse {
 export interface ChangePassword {
   current_password: string;
   new_password: string;
+  /** v2 : clé privée DM ré-emballée par la nouvelle KEK (sinon l'escrow devient indéchiffrable). */
+  priv_wrapped?: string | null;
 }
 export interface ChangeEmail {
   password: string;

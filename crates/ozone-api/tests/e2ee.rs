@@ -256,3 +256,168 @@ async fn edit_cipher_roundtrip() {
     assert_eq!(edited["content"].as_str().unwrap_or(""), "", "pas de clair après édition chiffrée");
     assert!(edited["edited_at"].as_u64().is_some(), "edited_at doit être posé");
 }
+
+// ─────────────────── Persistance multi-appareils (escrow + auth ZK, v2) ───────────────────
+// Le serveur traite l'identifiant de façon opaque : `password`/`auth_secret` = l'authSecret dérivé
+// côté client (ici une chaîne factice), et il stocke/restitue un escrow opaque qu'il ne peut pas lire.
+
+async fn register_v2(
+    app: &Router,
+    username: &str,
+    email: &str,
+    auth_secret: &str,
+    public_key: &str,
+    priv_wrapped: &str,
+) -> String {
+    let (st, body) = send(
+        app,
+        rq(
+            "POST",
+            "/auth/register",
+            Some(json!({
+                "username": username, "email": email, "password": auth_secret,
+                "public_key": public_key, "priv_wrapped": priv_wrapped,
+                "kdf_salt": format!("SALT_{username}")
+            })),
+            None,
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "register v2 {username} a échoué");
+    body["access_token"].as_str().unwrap().to_string()
+}
+
+async fn login(app: &Router, login: &str, secret: &str) -> StatusCode {
+    send(
+        app,
+        rq("POST", "/auth/login", Some(json!({ "login": login, "password": secret })), None),
+    )
+    .await
+    .0
+}
+
+/// 5. Inscription v2 : l'escrow est déposé et restituable ; le login se fait avec l'authSecret.
+#[tokio::test]
+async fn v2_register_escrow_and_login() {
+    let app = app().await;
+    let tok = register_v2(&app, "alice", "alice@v2.fr", "AUTH_alice", "PUB_alice", "WRAP_alice").await;
+
+    let (st, enc) = send(&app, rq("GET", "/users/@me/encryption", None, Some(&tok))).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(enc["public_key"].as_str(), Some("PUB_alice"));
+    assert_eq!(enc["priv_wrapped"].as_str(), Some("WRAP_alice"), "escrow restitué pour récupération");
+    assert_eq!(enc["pw_scheme"].as_i64(), Some(2));
+
+    // Login avec l'authSecret (= ce que dérive n'importe quel appareil) → OK ; secret erroné → 401.
+    assert_eq!(login(&app, "alice", "AUTH_alice").await, StatusCode::OK);
+    assert_eq!(login(&app, "alice", "MAUVAIS").await, StatusCode::UNAUTHORIZED);
+}
+
+/// 6. Compte legacy (v1) → migration vers v2 : preuve du mdp brut une fois, puis bascule sur authSecret.
+#[tokio::test]
+async fn legacy_upgrade_to_v2() {
+    let app = app().await;
+    let tok = register(&app, "bob", "bob@v2.fr").await; // legacy, mdp brut "Sup3r-Ozone-Pw"
+
+    let (_, enc) = send(&app, rq("GET", "/users/@me/encryption", None, Some(&tok))).await;
+    assert_eq!(enc["pw_scheme"].as_i64(), Some(1), "compte legacy = v1");
+    assert!(enc["priv_wrapped"].is_null(), "pas d'escrow avant migration");
+
+    let (st, _) = send(
+        &app,
+        rq(
+            "POST",
+            "/users/@me/encryption/upgrade",
+            Some(json!({
+                "current_password": "Sup3r-Ozone-Pw", "auth_secret": "AUTH_bob",
+                "public_key": "PUB_bob", "priv_wrapped": "WRAP_bob", "kdf_salt": "SALT_bob"
+            })),
+            Some(&tok),
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "migration v1→v2 a échoué");
+
+    // Désormais : login avec authSecret OK, mdp brut REFUSÉ.
+    assert_eq!(login(&app, "bob", "AUTH_bob").await, StatusCode::OK);
+    assert_eq!(login(&app, "bob", "Sup3r-Ozone-Pw").await, StatusCode::UNAUTHORIZED);
+
+    let (_, enc) = send(&app, rq("GET", "/users/@me/encryption", None, Some(&tok))).await;
+    assert_eq!(enc["pw_scheme"].as_i64(), Some(2));
+    assert_eq!(enc["priv_wrapped"].as_str(), Some("WRAP_bob"));
+
+    // Re-migration interdite (déjà en v2).
+    let (st, _) = send(
+        &app,
+        rq(
+            "POST",
+            "/users/@me/encryption/upgrade",
+            Some(json!({"current_password":"AUTH_bob","auth_secret":"X","public_key":"Y","priv_wrapped":"Z","kdf_salt":"S"})),
+            Some(&tok),
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::BAD_REQUEST);
+}
+
+/// 8. Prelogin : restitue le sel KDF d'un compte v2 ; anti-énumération pour un compte inexistant.
+#[tokio::test]
+async fn prelogin_returns_salt_and_hides_unknown() {
+    let app = app().await;
+    register_v2(&app, "dave", "dave@v2.fr", "AUTH_dave", "PUB_dave", "WRAP_dave").await;
+    // (register_v2 n'envoie pas de kdf_salt ⇒ NULL ⇒ prelogin renvoie un sel factice déterministe.)
+
+    // Compte existant trouvé par e-mail OU pseudo, schéma v2.
+    let (st, p1) = send(&app, rq("POST", "/auth/prelogin", Some(json!({ "login": "dave" })), None)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(p1["pw_scheme"].as_i64(), Some(2));
+    assert!(!p1["kdf_salt"].as_str().unwrap().is_empty());
+    let (_, p2) = send(&app, rq("POST", "/auth/prelogin", Some(json!({ "login": "dave@v2.fr" })), None)).await;
+    assert_eq!(p2["kdf_salt"], p1["kdf_salt"], "même sel par e-mail ou pseudo");
+
+    // Compte inexistant : réponse de même forme (sel factice déterministe), pas d'erreur d'énumération.
+    let (st, u1) = send(&app, rq("POST", "/auth/prelogin", Some(json!({ "login": "inconnu" })), None)).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(u1["kdf_salt"].as_str().unwrap().len(), 64, "sel factice = SHA-256 hex (64 car.)");
+    let (_, u2) = send(&app, rq("POST", "/auth/prelogin", Some(json!({ "login": "inconnu" })), None)).await;
+    assert_eq!(u1["kdf_salt"], u2["kdf_salt"], "déterministe pour le même identifiant");
+}
+
+/// 7. Changement de mot de passe (v2) : ré-emballe l'escrow avec la nouvelle KEK.
+#[tokio::test]
+async fn change_password_rewraps_escrow() {
+    let app = app().await;
+    let tok = register_v2(&app, "carol", "carol@v2.fr", "AUTH1", "PUB_carol", "WRAP1").await;
+
+    let (st, _) = send(
+        &app,
+        rq(
+            "PATCH",
+            "/users/@me/password",
+            Some(json!({ "current_password": "AUTH1", "new_password": "AUTH2", "priv_wrapped": "WRAP2" })),
+            Some(&tok),
+        ),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "changement de mot de passe v2 a échoué");
+
+    // Sessions révoquées → on se reconnecte avec le nouvel authSecret ; l'ancien est refusé.
+    assert_eq!(login(&app, "carol", "AUTH2").await, StatusCode::OK);
+    assert_eq!(login(&app, "carol", "AUTH1").await, StatusCode::UNAUTHORIZED);
+
+    // L'escrow a été ré-emballé.
+    let tok2 = register_v2_relogin(&app, "carol", "AUTH2").await;
+    let (_, enc) = send(&app, rq("GET", "/users/@me/encryption", None, Some(&tok2))).await;
+    assert_eq!(enc["priv_wrapped"].as_str(), Some("WRAP2"), "escrow ré-emballé après changement de mdp");
+}
+
+/// Reconnexion utilitaire renvoyant le token d'accès.
+async fn register_v2_relogin(app: &Router, login: &str, secret: &str) -> String {
+    let (st, body) = send(
+        app,
+        rq("POST", "/auth/login", Some(json!({ "login": login, "password": secret })), None),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    body["access_token"].as_str().unwrap().to_string()
+}
