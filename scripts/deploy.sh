@@ -146,6 +146,10 @@ cargo build --release -p ozone-api -p ozone-sfu
 
 if [ "${SKIP_FRONTEND:-0}" != "1" ] && command -v npm >/dev/null 2>&1; then
   log "Build du client web (desktop/)…"
+  # `npm ci` purge/réinstalle node_modules et `vite build` vide dist/ : ces dossiers doivent
+  # appartenir à l'utilisateur courant. Un reliquat root-owned (d'un run `sudo` précédent)
+  # casserait avec EACCES → on remet la propriété au compte qui lance la commande.
+  $SUDO chown -R "$(id -un)":"$(id -gn)" "$OZONE_DIR/desktop" 2>/dev/null || true
   ( cd "$OZONE_DIR/desktop" && npm ci --no-audit --no-fund && npm run build )
   log "Client web généré dans desktop/dist (à servir derrière le reverse-proxy TLS)."
 fi
