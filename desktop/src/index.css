@@ -504,4 +504,45 @@
       animation: none;
     }
   }
+
+  /* ── Style de pseudonyme : polices (familles système, pas de téléchargement) ── */
+  .name-font-serif {
+    font-family: Georgia, "Times New Roman", serif;
+  }
+  .name-font-mono {
+    font-family: ui-monospace, "Cascadia Code", "Consolas", monospace;
+    letter-spacing: -0.3px;
+  }
+  .name-font-round {
+    font-family: "Segoe UI Rounded", "SF Pro Rounded", ui-rounded, "Quicksand", system-ui;
+  }
+  .name-font-display {
+    font-family: "Trebuchet MS", "Segoe UI", system-ui;
+    font-weight: 800;
+    letter-spacing: 0.3px;
+  }
+  .name-font-hand {
+    font-family: "Segoe Script", "Bradley Hand", "Comic Sans MS", cursive;
+  }
+  .name-font-condensed {
+    font-family: "Arial Narrow", "Roboto Condensed", "Oswald", sans-serif;
+    letter-spacing: -0.2px;
+  }
+  .name-font-slab {
+    font-family: "Rockwell", "Roboto Slab", "Courier New", serif;
+    font-weight: 700;
+  }
+
+  /* ── Style de pseudonyme : effets « cartoon » (contour) et « pop » (relief autocollant) ── */
+  .name-cartoon {
+    font-weight: 800;
+    -webkit-text-stroke: 0.6px rgba(0, 0, 0, 0.55);
+    paint-order: stroke fill;
+  }
+  .name-pop {
+    font-weight: 800;
+    text-shadow:
+      1px 1px 0 rgba(0, 0, 0, 0.55),
+      -1px -1px 0 rgba(255, 255, 255, 0.25);
+  }
 }

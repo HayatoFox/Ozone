@@ -1,4 +1,10 @@
-import { memberTopColorRole, roleNameStyle, type RoleNameStyle, useStore } from "../store";
+import {
+  memberTopColorRole,
+  roleNameStyle,
+  userNameStyle,
+  type UserNameStyle,
+  useStore,
+} from "../store";
 import type { Member, Role } from "../types";
 import { Avatar } from "./Avatar";
 import { UserPopover } from "./ProfilePopout";
@@ -56,7 +62,7 @@ export function MemberList({ guildId }: { guildId: string }) {
               id={m.user.id}
               status={presences[m.user.id] ?? "online"}
               avatarId={m.user.avatar_id}
-              nameStyle={roleNameStyle(memberTopColorRole(roles, m)) ?? undefined}
+              nameStyle={userNameStyle(m.user.name_style) ?? roleNameStyle(memberTopColorRole(roles, m)) ?? undefined}
             />
           ))}
         </div>
@@ -71,7 +77,7 @@ export function MemberList({ guildId }: { guildId: string }) {
           id={m.user.id}
           status="offline"
           avatarId={m.user.avatar_id}
-          nameStyle={roleNameStyle(memberTopColorRole(roles, m)) ?? undefined}
+          nameStyle={userNameStyle(m.user.name_style) ?? roleNameStyle(memberTopColorRole(roles, m)) ?? undefined}
           dim
         />
       ))}
@@ -101,7 +107,7 @@ function MemberRow({
   id: string;
   status?: string;
   avatarId?: string | null;
-  nameStyle?: RoleNameStyle;
+  nameStyle?: UserNameStyle;
   dim?: boolean;
 }) {
   // Statut personnalisé : affiché sous le nom (mis à jour en direct via PRESENCE_UPDATE).

@@ -2,7 +2,15 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Bell, Headphones, KeyRound, LogOut, Mail, Palette, ShieldCheck, Trash2, Upload, UserRound, X } from "lucide-react";
 import { api, ApiError } from "../api";
 import { e2eeChangePassword } from "../lib/e2ee";
-import { roleColorHex, useStore, type MessageDisplay, type Theme } from "../store";
+import {
+  NAME_EFFECTS,
+  NAME_FONT_COUNT,
+  roleColorHex,
+  userNameStyle,
+  useStore,
+  type MessageDisplay,
+  type Theme,
+} from "../store";
 import type { UserProfile } from "../types";
 import { colorFor, displayName, initials } from "../lib/format";
 import { mediaUrl } from "../lib/instance";
@@ -431,12 +439,29 @@ const ACCENT_PRESETS = [
   0x6a5bff, 0x3ba55c, 0xfcb833, 0xda3e44, 0xeb459e, 0xe67e22, 0x3498db, 0x9b59b6, 0x1abc9c, 0x607d8b,
 ];
 
+// Libellés FR des effets de pseudo + palette de couleurs du style.
+const EFFECT_LABEL: Record<string, string> = {
+  uni: "Uni",
+  gradient: "Dégradé",
+  neon: "Néon",
+  cartoon: "Cartoon",
+  pop: "Pop",
+};
+const NAME_PALETTE = [
+  0xffffff, 0x6a5bff, 0x3ba55c, 0xfcb833, 0xda3e44, 0xeb459e, 0x3498db, 0x9b59b6, 0x1abc9c, 0xe67e22,
+];
+
 function ProfileSection() {
   const me = useStore((s) => s.me);
   const [name, setName] = useState(me?.display_name ?? "");
   const [pronouns, setPronouns] = useState("");
   const [bio, setBio] = useState("");
   const [accent, setAccent] = useState<number>(0x6a5bff);
+  // Style de pseudonyme (police / effet / couleur(s)).
+  const [nsFont, setNsFont] = useState(0);
+  const [nsEffect, setNsEffect] = useState("uni");
+  const [nsColor, setNsColor] = useState<number | null>(null);
+  const [nsColor2, setNsColor2] = useState<number | null>(null);
   const [avatarId, setAvatarId] = useState<string | null>(null);
   const [bannerId, setBannerId] = useState<string | null>(null);
   // Aperçus locaux (object URLs) : l'image fraîchement rognée n'est servie par le serveur
@@ -467,6 +492,13 @@ function ProfileSection() {
         setAvatarId(p.avatar_id ?? null);
         setBannerId(p.banner_id ?? null);
         if (p.accent_color != null) setAccent(p.accent_color);
+        const ns = p.name_style;
+        if (ns) {
+          setNsFont(ns.font ?? 0);
+          setNsEffect(ns.effect || "uni");
+          setNsColor(ns.color ?? null);
+          setNsColor2(ns.color2 ?? null);
+        }
         setLoaded(true);
       })
       .catch(() => {
@@ -492,6 +524,7 @@ function ProfileSection() {
         // Chaîne vide = effacer côté serveur.
         avatar_id: avatarId ?? "",
         banner_id: bannerId ?? "",
+        name_style: { font: nsFont, effect: nsEffect, color: nsColor, color2: nsColor2 },
       });
       useStore.setState({ me: updated });
       setSaved(true);
@@ -534,6 +567,8 @@ function ProfileSection() {
 
   const shownName = name.trim() || displayName(me);
   const accentHex = roleColorHex(accent);
+  // Aperçu live du style de pseudo (mêmes règles que partout ailleurs).
+  const previewName = userNameStyle({ font: nsFont, effect: nsEffect, color: nsColor, color2: nsColor2 });
 
   return (
     <>
@@ -659,6 +694,79 @@ function ProfileSection() {
             </div>
           </div>
 
+          {/* Style du pseudonyme : police + effet + couleur(s), appliqué partout (façon Discord). */}
+          <div>
+            <span className="mb-1.5 block text-xs font-bold uppercase tracking-wide text-subtext">
+              Style du pseudonyme
+            </span>
+            <span className="mb-1 block text-[11px] text-muted">Police</span>
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {Array.from({ length: NAME_FONT_COUNT }).map((_, i) => {
+                const s = userNameStyle({ font: i, effect: "uni", color: nsColor });
+                return (
+                  <button
+                    key={i}
+                    onClick={() => { setNsFont(i); setSaved(false); }}
+                    className={`h-10 w-12 rounded-md bg-deepest text-base font-semibold text-header ring-1 transition ${nsFont === i ? "ring-2 ring-accent" : "ring-line hover:ring-white/30"} ${s?.className ?? ""}`}
+                    style={s?.style}
+                    title={`Police ${i + 1}`}
+                  >
+                    Aa
+                  </button>
+                );
+              })}
+            </div>
+            <span className="mb-1 block text-[11px] text-muted">Effet</span>
+            <div className="mb-3 flex flex-wrap gap-1.5">
+              {NAME_EFFECTS.map((eff) => {
+                const s = userNameStyle({ font: 0, effect: eff, color: nsColor ?? 0x6a5bff, color2: nsColor2 });
+                return (
+                  <button
+                    key={eff}
+                    onClick={() => { setNsEffect(eff); setSaved(false); }}
+                    className={`rounded-md bg-deepest px-3 py-1.5 text-sm font-semibold text-header ring-1 transition ${nsEffect === eff ? "ring-2 ring-accent" : "ring-line hover:ring-white/30"} ${s?.className ?? ""}`}
+                    style={s?.style}
+                  >
+                    {EFFECT_LABEL[eff]}
+                  </button>
+                );
+              })}
+            </div>
+            <span className="mb-1 block text-[11px] text-muted">
+              {nsEffect === "gradient" ? "Couleur principale" : "Couleur"}
+            </span>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => { setNsColor(null); setSaved(false); }}
+                title="Couleur par défaut"
+                className={`flex h-7 w-7 items-center justify-center rounded-full bg-field text-xs text-muted ring-1 ${nsColor == null ? "ring-2 ring-white" : "ring-line hover:ring-white/30"}`}
+              >
+                ✕
+              </button>
+              {NAME_PALETTE.map((c) => (
+                <button
+                  key={c}
+                  onClick={() => { setNsColor(c); setSaved(false); }}
+                  className={`pressable h-7 w-7 rounded-full transition hover:scale-110 ${nsColor === c ? "ring-2 ring-white ring-offset-2 ring-offset-chat" : ""}`}
+                  style={{ backgroundColor: roleColorHex(c) }}
+                />
+              ))}
+            </div>
+            {nsEffect === "gradient" && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <span className="text-[11px] text-muted">2ᵉ couleur</span>
+                {NAME_PALETTE.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => { setNsColor2(c); setSaved(false); }}
+                    className={`pressable h-6 w-6 rounded-full transition hover:scale-110 ${nsColor2 === c ? "ring-2 ring-white" : ""}`}
+                    style={{ backgroundColor: roleColorHex(c) }}
+                  />
+                ))}
+              </div>
+            )}
+          </div>
+
           <div className="flex items-center gap-3">
             <button
               onClick={() => void save()}
@@ -696,7 +804,12 @@ function ProfileSection() {
                 </div>
               </div>
               <div className="rounded-lg bg-deepest p-3">
-                <div className="text-lg font-bold text-header">{shownName}</div>
+                <div
+                  className={`text-lg font-bold text-header ${previewName?.className ?? ""}`}
+                  style={previewName?.style}
+                >
+                  {shownName}
+                </div>
                 <div className="text-sm text-muted">@{me.username}</div>
                 {pronouns.trim() && <div className="mt-0.5 text-xs text-muted">{pronouns}</div>}
                 {bio.trim() && (

@@ -6,7 +6,7 @@ use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
 use crate::state::{AppState, EventScope, HubEvent};
-use crate::util::parse_i64;
+use crate::util::{parse_i64, parse_name_style};
 use axum::extract::{Path, Query, State};
 use axum::Json;
 use crate::routes_polls::build_poll;
@@ -27,7 +27,7 @@ const MSG_SELECT: &str =
      m.created_at, m.edited_at, m.reference_id, m.pinned, m.webhook_id, \
      m.author_name AS wh_name, m.author_avatar AS wh_avatar, \
      m.sticker_id, stk.name AS sticker_name, stk.format_type AS sticker_format, m.embeds, m.cipher, \
-     u.username, u.display_name, u.avatar_id \
+     u.username, u.display_name, u.avatar_id, u.name_style \
      FROM messages m JOIN users u ON u.id = m.author_id \
      LEFT JOIN stickers stk ON stk.id = m.sticker_id";
 
@@ -71,6 +71,7 @@ fn row_to_message_basic(r: SqliteRow) -> Message {
             display_name,
             avatar_id,
             email: None,
+            name_style: parse_name_style(r.get("name_style")),
         },
         content: r.get("content"),
         kind: r.get::<i64, _>("kind") as u8,

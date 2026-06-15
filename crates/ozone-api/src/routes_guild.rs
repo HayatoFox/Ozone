@@ -6,7 +6,7 @@ use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::permissions as pg;
 use crate::state::{AppState, EventScope};
-use crate::util::parse_i64;
+use crate::util::{parse_i64, parse_name_style};
 use axum::extract::{Path, State};
 use axum::Json;
 use ozone_proto::dto::{CreateInvite, Guild, Invite, InvitePreview, Member, User};
@@ -41,6 +41,7 @@ fn row_to_member(r: &sqlx::sqlite::SqliteRow, can_see_method: bool) -> Member {
             display_name: r.get("display_name"),
             avatar_id: r.get("avatar_id"),
             email: None,
+            name_style: parse_name_style(r.get("name_style")),
         },
         nick: r.get("nick"),
         roles,
@@ -75,7 +76,7 @@ pub async fn list_members(
         .map(|s| format!("%{}%", s.trim().to_lowercase()))
         .filter(|s| s.len() > 2);
 
-    let base = "SELECT gm.user_id, gm.nick, gm.joined_at, gm.invite_code, u.username, u.display_name, u.avatar_id, \
+    let base = "SELECT gm.user_id, gm.nick, gm.joined_at, gm.invite_code, u.username, u.display_name, u.avatar_id, u.name_style, \
         (SELECT GROUP_CONCAT(mr.role_id) FROM member_roles mr WHERE mr.guild_id = gm.guild_id AND mr.user_id = gm.user_id) AS role_ids \
         FROM guild_members gm JOIN users u ON u.id = gm.user_id \
         WHERE gm.guild_id = ?1 \

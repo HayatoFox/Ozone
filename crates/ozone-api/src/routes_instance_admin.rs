@@ -146,6 +146,7 @@ pub async fn list_users(
                     display_name: r.get("display_name"),
                     avatar_id: r.get("avatar_id"),
                     email: None,
+                    name_style: None, // vue admin (table) : nom brut
                 },
                 role: r.get("role"),
                 suspended: r.get::<i64, _>("suspended") != 0,

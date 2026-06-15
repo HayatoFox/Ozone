@@ -932,6 +932,7 @@ impl App {
                     pronouns: None,
                     banner_id: None,
                     accent_color: None,
+                    name_style: None, // l'UI iced legacy ne gère pas le style de pseudo
                 };
                 self.instances[idx].user_label = display; // reflet local immédiat
                 let api = self.instances[idx].api.clone();

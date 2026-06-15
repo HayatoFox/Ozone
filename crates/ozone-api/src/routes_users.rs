@@ -17,7 +17,7 @@ use sqlx::Row;
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 
-const PROFILE_SELECT: &str = "SELECT id, username, display_name, avatar_id, bio, pronouns, banner_id, accent_color, created_at FROM users";
+const PROFILE_SELECT: &str = "SELECT id, username, display_name, avatar_id, bio, pronouns, banner_id, accent_color, created_at, name_style FROM users";
 const MAX_SETTINGS_BYTES: usize = 64 * 1024;
 
 // Anti-spam du profil : chaque PATCH déclenche un USER_UPDATE en fan-out (amis, MP, guildes
@@ -48,6 +48,7 @@ fn row_to_profile(r: SqliteRow) -> UserProfile {
         banner_id: r.get("banner_id"),
         accent_color: r.get::<Option<i64>, _>("accent_color").map(|c| c as u32),
         created_at: r.get::<i64, _>("created_at") as u64,
+        name_style: crate::util::parse_name_style(r.get("name_style")),
     }
 }
 
@@ -128,7 +129,31 @@ pub async fn update_profile(
     .execute(&st.pool)
     .await?;
 
-    // Propage le nouveau profil public (pseudo/avatar) EN DIRECT : soi, amis, MP, guildes partagées.
+    // Style de pseudonyme : `Some` remplace. Un style « par défaut » (police 0, effet uni/vide, sans
+    // couleur) réinitialise (NULL). Borné : couleurs masquées à 24 bits, effet en liste blanche.
+    if let Some(ns) = &req.name_style {
+        const EFFECTS: [&str; 5] = ["uni", "gradient", "neon", "cartoon", "pop"];
+        let effect = if EFFECTS.contains(&ns.effect.as_str()) { ns.effect.as_str() } else { "uni" };
+        let is_default = ns.font == 0 && ns.color.is_none() && (effect == "uni");
+        let json = if is_default {
+            None
+        } else {
+            serde_json::to_string(&ozone_proto::dto::NameStyle {
+                font: ns.font.min(15),
+                effect: effect.to_string(),
+                color: ns.color.map(|c| c & 0xFF_FFFF),
+                color2: ns.color2.map(|c| c & 0xFF_FFFF),
+            })
+            .ok()
+        };
+        sqlx::query("UPDATE users SET name_style = ? WHERE id = ?")
+            .bind(json.as_deref())
+            .bind(uid)
+            .execute(&st.pool)
+            .await?;
+    }
+
+    // Propage le nouveau profil public (pseudo/avatar/style) EN DIRECT : soi, amis, MP, guildes partagées.
     crate::gateway::broadcast_user_update(&st, uid).await;
 
     Ok(Json(fetch_profile(&st, uid).await?))

@@ -238,12 +238,13 @@ async fn broadcast_speaking(st: &AppState, uid: i64, speaking: bool) {
 /// les vues qui l'affichent : ses propres sessions, ses **amis**, ses **co-destinataires de MP**
 /// et toutes les **guildes partagées** (listes de membres, auteurs de messages…).
 pub async fn broadcast_user_update(st: &AppState, uid: i64) {
-    let Some(row) = sqlx::query("SELECT username, display_name, avatar_id FROM users WHERE id = ?")
-        .bind(uid)
-        .fetch_optional(&st.pool)
-        .await
-        .ok()
-        .flatten()
+    let Some(row) =
+        sqlx::query("SELECT username, display_name, avatar_id, name_style FROM users WHERE id = ?")
+            .bind(uid)
+            .fetch_optional(&st.pool)
+            .await
+            .ok()
+            .flatten()
     else {
         return;
     };
@@ -252,6 +253,8 @@ pub async fn broadcast_user_update(st: &AppState, uid: i64) {
         "username": row.get::<String, _>("username"),
         "display_name": row.get::<Option<String>, _>("display_name"),
         "avatar_id": row.get::<Option<String>, _>("avatar_id"),
+        // Propage aussi le style de pseudo (peut être null → réinitialise chez les pairs).
+        "name_style": crate::util::parse_name_style(row.get("name_style")),
     });
 
     // Destinataires « par utilisateur » (dédupliqués) : soi + amis (deux sens) + co-MP.

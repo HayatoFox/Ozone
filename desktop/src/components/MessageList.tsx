@@ -8,6 +8,8 @@ import {
   roleColorHex,
   roleNameStyle,
   type RoleNameStyle,
+  userNameStyle,
+  type UserNameStyle,
   useStore,
 } from "../store";
 import { CH_GROUP, MSG_MEMBER_JOIN, type Attachment, type Message, type Snowflake } from "../types";
@@ -153,7 +155,8 @@ export function MessageList({
         <ChannelWelcome name={channelName} dm={dm} channelId={channelId} />
         {messages.map((m, i) => {
           const grouped = isGrouped(messages[i - 1], m);
-          const nameStyle = styleOf(m.author.id);
+          // Le style de pseudo PERSONNEL (profil) prime sur la couleur de rôle, et s'affiche partout.
+          const nameStyle = userNameStyle(m.author.name_style) ?? styleOf(m.author.id);
           const newDay = i === 0 || !sameDay(messages[i - 1].created_at, m.created_at);
           // Messages système (type 7 = arrivée) : ligne dédiée, sans menu contextuel.
           if (m.type === MSG_MEMBER_JOIN) {
@@ -368,7 +371,7 @@ function ChannelWelcome({ name, dm, channelId }: { name?: string; dm?: boolean; 
 
 interface RowProps {
   message: Message;
-  nameStyle?: RoleNameStyle;
+  nameStyle?: UserNameStyle;
   channelId: Snowflake;
   guildId?: Snowflake;
   ctx: MentionCtx;

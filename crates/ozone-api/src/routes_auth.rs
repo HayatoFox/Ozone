@@ -337,18 +337,20 @@ pub async fn refresh(
 
 /// `GET /users/@me`
 pub async fn me(State(st): State<AppState>, user: AuthUser) -> AppResult<Json<User>> {
-    let row =
-        sqlx::query("SELECT id, username, display_name, avatar_id, email FROM users WHERE id = ?")
-            .bind(user.id.as_i64())
-            .fetch_optional(&st.pool)
-            .await?
-            .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
+    let row = sqlx::query(
+        "SELECT id, username, display_name, avatar_id, email, name_style FROM users WHERE id = ?",
+    )
+    .bind(user.id.as_i64())
+    .fetch_optional(&st.pool)
+    .await?
+    .ok_or_else(|| AppError::not_found("utilisateur introuvable"))?;
     Ok(Json(User {
         id: Snowflake::from_i64(row.get::<i64, _>("id")),
         username: row.get("username"),
         display_name: row.get("display_name"),
         avatar_id: row.get("avatar_id"),
         email: Some(row.get("email")),
+        name_style: crate::util::parse_name_style(row.get("name_style")),
     }))
 }
 
@@ -522,17 +524,19 @@ pub async fn change_email(
         .bind(uid)
         .execute(&st.pool)
         .await?;
-    let row =
-        sqlx::query("SELECT id, username, display_name, avatar_id, email FROM users WHERE id = ?")
-            .bind(uid)
-            .fetch_one(&st.pool)
-            .await?;
+    let row = sqlx::query(
+        "SELECT id, username, display_name, avatar_id, email, name_style FROM users WHERE id = ?",
+    )
+    .bind(uid)
+    .fetch_one(&st.pool)
+    .await?;
     Ok(Json(User {
         id: Snowflake::from_i64(row.get::<i64, _>("id")),
         username: row.get("username"),
         display_name: row.get("display_name"),
         avatar_id: row.get("avatar_id"),
         email: Some(row.get("email")),
+        name_style: crate::util::parse_name_style(row.get("name_style")),
     }))
 }
 

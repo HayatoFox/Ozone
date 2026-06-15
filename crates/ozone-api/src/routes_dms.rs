@@ -8,7 +8,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::state::{AppState, EventScope};
-use crate::util::parse_i64;
+use crate::util::{parse_i64, parse_name_style};
 use axum::extract::{Path, State};
 use axum::Json;
 use ozone_proto::dto::{CreateDM, DMChannel, User};
@@ -53,7 +53,7 @@ async fn build_dm_channel(st: &AppState, cid: i64, uid: i64) -> AppResult<DMChan
     let owner_id: Option<i64> = row.get("owner_id");
 
     let recs = sqlx::query(
-        "SELECT u.id, u.username, u.display_name, u.avatar_id \
+        "SELECT u.id, u.username, u.display_name, u.avatar_id, u.name_style \
          FROM dm_recipients r JOIN users u ON u.id = r.user_id WHERE r.channel_id = ? ORDER BY u.id",
     )
     .bind(cid)
@@ -67,6 +67,7 @@ async fn build_dm_channel(st: &AppState, cid: i64, uid: i64) -> AppResult<DMChan
             display_name: r.get("display_name"),
             avatar_id: r.get("avatar_id"),
             email: None,
+            name_style: parse_name_style(r.get("name_style")),
         })
         .collect();
 

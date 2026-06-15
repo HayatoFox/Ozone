@@ -247,6 +247,7 @@ pub async fn list_bans(
                     display_name: r.get("display_name"),
                     avatar_id: r.get("avatar_id"),
                     email: None,
+                    name_style: None, // liste de bannissements : nom brut
                 },
                 reason: r.get("reason"),
                 moderator_id: Snowflake::from_i64(r.get::<i64, _>("moderator_id")),

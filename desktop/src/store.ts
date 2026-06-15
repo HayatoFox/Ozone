@@ -36,6 +36,7 @@ import {
   type Emoji,
   type Member,
   type Message,
+  type NameStyle,
   type NotificationSetting,
   type Poll,
   type PresenceView,
@@ -2686,6 +2687,55 @@ function gradientText(colors: string, second: string | undefined, angle: string)
     color: "transparent",
     WebkitTextFillColor: "transparent",
   };
+}
+
+// Classes de police du style de pseudo (index → famille CSS, définies dans index.css). 0 = défaut.
+const NAME_FONT_CLASS = [
+  "",
+  "name-font-serif",
+  "name-font-mono",
+  "name-font-round",
+  "name-font-display",
+  "name-font-hand",
+  "name-font-condensed",
+  "name-font-slab",
+];
+
+/** Effets disponibles pour le style de pseudo (ordre = celui de la modale). */
+export const NAME_EFFECTS = ["uni", "gradient", "neon", "cartoon", "pop"] as const;
+/** Nombre de polices proposées (index 0 = défaut). */
+export const NAME_FONT_COUNT = NAME_FONT_CLASS.length;
+
+export interface UserNameStyle {
+  style: CSSProperties;
+  className: string;
+}
+
+// Style CSS d'un **pseudo personnalisé** (police + effet + couleur). `null` si aucun style → repli
+// sur la couleur de rôle / le défaut. Appliqué partout où le nom de l'utilisateur s'affiche.
+export function userNameStyle(ns?: NameStyle | null): UserNameStyle | null {
+  if (!ns) return null;
+  const fontClass = NAME_FONT_CLASS[ns.font ?? 0] ?? "";
+  const effect = ns.effect || "uni";
+  const c1 = ns.color != null ? roleColorHex(ns.color) : null;
+  const c2 = ns.color2 != null ? roleColorHex(ns.color2) : c1;
+  if (!c1 && effect === "uni" && !fontClass) return null; // rien à appliquer
+  let style: CSSProperties = {};
+  let className = fontClass;
+  if (effect === "gradient" && c1) {
+    style = gradientText(c1, c2 ?? c1, "90deg");
+  } else if (effect === "neon" && c1) {
+    style = { color: c1, textShadow: `0 0 2px ${c1}, 0 0 6px ${c1}b3` };
+  } else if (effect === "cartoon") {
+    className = `${className} name-cartoon`.trim();
+    if (c1) style.color = c1;
+  } else if (effect === "pop") {
+    className = `${className} name-pop`.trim();
+    if (c1) style.color = c1;
+  } else if (c1) {
+    style = { color: c1 };
+  }
+  return { style, className: className.trim() };
 }
 
 // Permissions EFFECTIVES de l'utilisateur courant dans une guilde (bitfield).

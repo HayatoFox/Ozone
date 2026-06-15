@@ -174,6 +174,24 @@ pub struct TokenPair {
 
 // ──────────────────────────────── Entités ────────────────────────────────
 
+/// Style de pseudonyme personnalisé (façon Discord Nitro) : police, effet, couleur(s). Personnel à
+/// l'utilisateur, appliqué partout où son nom s'affiche.
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
+pub struct NameStyle {
+    /// Index de police (0 = défaut). Le client mappe vers une famille CSS.
+    #[serde(default)]
+    pub font: u8,
+    /// Effet : "" / "uni", "gradient", "neon", "cartoon", "pop".
+    #[serde(default)]
+    pub effect: String,
+    /// Couleur principale (0..=0xFFFFFF). Absente ⇒ couleur par défaut/héritée.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<u32>,
+    /// Couleur secondaire (dégradé).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color2: Option<u32>,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct User {
     pub id: Snowflake,
@@ -183,6 +201,9 @@ pub struct User {
     /// Présent uniquement pour `users/@me`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub email: Option<String>,
+    /// Style de pseudonyme personnalisé (omis si aucun). Voyage avec l'auteur/membre/destinataire.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_style: Option<NameStyle>,
 }
 
 /// Clé publique de chiffrement DM d'un utilisateur (P-256 ECDH, SPKI base64).
@@ -1163,6 +1184,9 @@ pub struct UserProfile {
     pub banner_id: Option<String>,
     pub accent_color: Option<u32>,
     pub created_at: u64,
+    /// Style de pseudonyme personnalisé (police/effet/couleur).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name_style: Option<NameStyle>,
 }
 
 /// Mise à jour de son propre profil. Champ absent = inchangé ; chaîne vide = effacé.
@@ -1180,6 +1204,9 @@ pub struct UpdateProfile {
     pub banner_id: Option<String>,
     #[serde(default)]
     pub accent_color: Option<u32>,
+    /// Style de pseudonyme : `Some` = remplace (objet vide/effet "uni" sans couleur = réinitialise).
+    #[serde(default)]
+    pub name_style: Option<NameStyle>,
 }
 
 /// Réglages client (blob JSON libre géré par le client).

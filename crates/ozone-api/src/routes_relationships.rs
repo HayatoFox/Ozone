@@ -6,7 +6,7 @@ use crate::db::now_ms;
 use crate::error::{AppError, AppResult};
 use crate::extract::AuthUser;
 use crate::state::{AppState, EventScope};
-use crate::util::parse_i64;
+use crate::util::{parse_i64, parse_name_style};
 use axum::extract::{Path, State};
 use axum::Json;
 use ozone_proto::dto::{AddRelationship, Relationship, RelationshipType, UpdateNote, User};
@@ -143,7 +143,7 @@ pub async fn list_relationships(
 ) -> AppResult<Json<Vec<Relationship>>> {
     let me = user.id.as_i64();
     let rows = sqlx::query(
-        "SELECT r.target_id, r.type, r.since, u.username, u.display_name, u.avatar_id \
+        "SELECT r.target_id, r.type, r.since, u.username, u.display_name, u.avatar_id, u.name_style \
          FROM relationships r \
          JOIN users u ON u.id = r.target_id \
          WHERE r.user_id = ? \
@@ -167,6 +167,7 @@ pub async fn list_relationships(
                     display_name: r.get("display_name"),
                     avatar_id: r.get("avatar_id"),
                     email: None,
+                    name_style: parse_name_style(r.get("name_style")),
                 },
                 since: r.get::<i64, _>("since") as u64,
             }

@@ -96,12 +96,26 @@ export interface TokenPair {
 
 // ──────────────────────────────── Entités ────────────────────────────────
 
+/** Style de pseudonyme personnalisé (police + effet + couleur), appliqué partout où le nom s'affiche. */
+export interface NameStyle {
+  /** Index de police (0 = défaut). */
+  font?: number;
+  /** "uni" | "gradient" | "neon" | "cartoon" | "pop" (vide = uni). */
+  effect?: string;
+  /** Couleur principale (0..=0xFFFFFF). */
+  color?: number | null;
+  /** Couleur secondaire (dégradé). */
+  color2?: number | null;
+}
+
 export interface User {
   id: Snowflake;
   username: string;
   display_name: string | null;
   avatar_id: string | null;
   email?: string | null;
+  /** Style de pseudonyme personnalisé (voyage avec l'auteur/membre/destinataire). */
+  name_style?: NameStyle | null;
 }
 
 /** Clé publique de chiffrement DM (E2EE) d'un utilisateur — `null` s'il n'en a pas publié. */
@@ -574,6 +588,7 @@ export interface UserProfile {
   banner_id: string | null;
   accent_color: number | null;
   created_at: number;
+  name_style?: NameStyle | null;
 }
 
 export interface UpdateProfile {
@@ -583,6 +598,7 @@ export interface UpdateProfile {
   pronouns?: string | null;
   banner_id?: string | null;
   accent_color?: number | null;
+  name_style?: NameStyle | null;
 }
 
 // ──────────────────────────── Webhooks ────────────────────────────

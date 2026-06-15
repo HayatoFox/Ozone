@@ -13,7 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { api } from "../api";
-import { canIn, roleColorHex, useStore } from "../store";
+import { canIn, roleColorHex, userNameStyle, useStore } from "../store";
 import { PERM } from "../lib/permissions";
 import { OVERLAY_ANIM } from "../lib/anim";
 import { CH_VOICE, type ModerateVoiceState, type UserProfile } from "../types";
@@ -236,6 +236,7 @@ export function UserPopover({
 
   const name = profile?.display_name || profile?.username || "";
   const accent = profile?.accent_color ? roleColorHex(profile.accent_color) : colorFor(userId);
+  const nameSt = userNameStyle(profile?.name_style);
 
   return (
     <Popover.Root open={open} onOpenChange={(o) => void onOpenChange(o)}>
@@ -284,7 +285,10 @@ export function UserPopover({
             ) : profile ? (
               <div className="rounded-xl bg-deepest p-3 surface-card">
                 <div className="flex items-center gap-1.5">
-                  <span className="min-w-0 truncate text-lg font-bold text-header">
+                  <span
+                    className={`min-w-0 truncate text-lg font-bold text-header ${nameSt?.className ?? ""}`}
+                    style={nameSt?.style}
+                  >
                     {member?.nick || name}
                   </span>
                   {nickEditable && !editingNick && (
